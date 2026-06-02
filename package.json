@@ -1,0 +1,12 @@
+{
+  "name": "suivi-copro-local",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Web app locale de suivi des sujets de copropriete.",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
