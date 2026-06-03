@@ -1,5 +1,7 @@
 # Suivi Copro Local
 
+![Capture d’écran de Copropro](Screenshot%20%20Copropro%20%E2%80%94%20Sujets%20de%20Coproprie%CC%81te%CC%81.png)
+
 Application web locale pour suivre les sujets d’une copropriété : incidents, demandes, documents, actions à mener et état d’avancement.
 
 L’app fonctionne en local avec Node.js, sans base de données externe. Les sujets sont enregistrés sous forme de fichiers Markdown et les pièces jointes sont stockées dans un dossier dédié.
@@ -9,12 +11,12 @@ L’app fonctionne en local avec Node.js, sans base de données externe. Les suj
 - Tableau de bord des sujets actifs, urgents, à traiter, partiellement traités et traités.
 - Création de nouveaux sujets depuis l’interface.
 - Classement par filtres ou bâtiments.
+- Configuration Markdown de l’adresse de copropriété, du syndic et des filtres.
 - Recherche par titre, contenu, mot-clé ou document.
 - Édition locale des sujets.
 - Ajout et suppression de pièces jointes.
 - Explorateur de documents intégré.
 - Changement de thème clair / sombre.
-- Personnalisation de la photo de l’immeuble.
 - Stockage local simple dans des dossiers `Contents`, `Documents` et `assets`.
 
 ## Aperçu du projet
@@ -22,13 +24,14 @@ L’app fonctionne en local avec Node.js, sans base de données externe. Les suj
 ```text
 .
 ├── index.html              # Interface principale
-├── app.js                  # Logique front-end
-├── styles.css              # Styles de l’application
 ├── server.js               # Serveur local Node.js
 ├── package.json            # Script de démarrage
 ├── Contents/               # Sujets Markdown générés par l’app
 ├── Documents/              # Pièces jointes ajoutées aux sujets
-├── assets/                 # Images et fichiers statiques
+├── assets/
+│   ├── app.js              # Logique front-end
+│   ├── styles.css          # Styles de l’application
+│   └── config.md           # Adresse, syndic et filtres affichés
 └── Demarrer web app.command # Lanceur macOS optionnel
 ```
 
@@ -108,6 +111,44 @@ Un sujet peut contenir :
 
 Les pièces jointes ajoutées depuis l’interface sont copiées dans `Documents`.
 
+## Configuration
+
+La configuration générale est stockée dans `assets/config.md`.
+
+Ce fichier contient :
+
+- l’adresse de la copropriété ;
+- le nom du syndic ;
+- la liste et l’ordre des filtres affichés dans l’application.
+
+Format attendu :
+
+```md
+# Configuration
+
+## Copropriété
+
+Adresse: l'adresse de votre copropriété
+Syndic: Nom du Syndic
+
+## Filtres
+
+- Bâtiment A (Rue)
+- Général
+```
+
+Au démarrage, l’application lit cette configuration via le serveur local. Si le serveur n’est pas disponible, le navigateur peut lire `assets/config.md` en secours, mais les modifications ne pourront pas être enregistrées.
+
+Les changements faits depuis l’interface en mode édition sont enregistrés dans `assets/config.md` :
+
+- modification du texte d’adresse / syndic dans l’en-tête ;
+- ajout d’un filtre ;
+- renommage d’un filtre ;
+- suppression d’un filtre vide ;
+- réorganisation des filtres par glisser-déposer.
+
+Les filtres restent liés aux dossiers de `Contents`. Lorsqu’un filtre est ajouté ou renommé, le serveur crée ou renomme le dossier correspondant et met à jour les sujets Markdown concernés.
+
 ## Données locales
 
 Cette application ne nécessite pas de service cloud ni de base de données distante.
@@ -117,10 +158,10 @@ Les données importantes sont principalement stockées dans :
 ```text
 Contents/
 Documents/
-assets/
+assets/config.md
 ```
 
-Pour sauvegarder le projet, conserver ces dossiers avec les fichiers de l’application.
+Pour sauvegarder le projet, conserver ces dossiers et le fichier `assets/config.md` avec les fichiers de l’application.
 
 ## Scripts disponibles
 
@@ -147,7 +188,7 @@ Avant de publier le dépôt, vérifier que les dossiers suivants ne contiennent 
 ```text
 Contents/
 Documents/
-assets/
+assets/config.md
 ```
 
 ## Licence
