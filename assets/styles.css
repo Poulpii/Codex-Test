@@ -1,14 +1,14 @@
 
-/* index.css - Premium Design System for Canopée Copropriété Dashboard */
+/* index.css - Premium Design System for Copropro Copropriété Dashboard */
 
 
 :root {
   /* Colors - Dark Theme (Default) */
-  --bg-primary: #0b0f19;
-  --bg-secondary: #131a2e;
-  --bg-tertiary: #1b243d;
-  --bg-card: rgba(22, 30, 54, 0.6);
-  --bg-card-hover: rgba(29, 40, 72, 0.8);
+  --bg-primary: #172033;
+  --bg-secondary: #202b42;
+  --bg-tertiary: #2a3752;
+  --bg-card: rgba(38, 50, 76, 0.68);
+  --bg-card-hover: rgba(48, 62, 92, 0.86);
   --border-color: rgba(255, 255, 255, 0.08);
   --border-color-hover: rgba(255, 255, 255, 0.15);
   
@@ -34,7 +34,7 @@
   --color-success-border: rgba(16, 185, 129, 0.25);
   
   /* Brand accents */
-  --accent-primary: #10b981; /* Emerald/Green representing Canopée */
+  --accent-primary: #10b981; /* Emerald/Green representing Copropro */
   --accent-primary-gradient: linear-gradient(135deg, #10b981 0%, #059669 100%);
   --accent-secondary: #06b6d4; /* Cyan */
   --accent-secondary-gradient: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%);
@@ -53,8 +53,6 @@
   --radius-md: 12px;
   --radius-lg: 16px;
   --radius-xl: 24px;
-  --fixed-header-height: 72px;
-  --edit-banner-height: 0px;
 }
 
 /* Light Theme Variables */
@@ -110,13 +108,52 @@ body.light-theme ::-webkit-scrollbar-thumb:hover {
   background: rgba(0, 0, 0, 0.3);
 }
 
+html {
+  min-height: 100%;
+  overflow-x: clip;
+  overflow-y: scroll;
+  overscroll-behavior-y: auto;
+  scrollbar-gutter: stable;
+  scrollbar-width: auto;
+  scrollbar-color: rgba(16, 185, 129, 0.65) rgba(15, 23, 42, 0.08);
+}
+
+html::-webkit-scrollbar {
+  width: 12px;
+}
+
+html::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.08);
+}
+
+html::-webkit-scrollbar-thumb {
+  background: rgba(16, 185, 129, 0.65);
+  border: 3px solid rgba(15, 23, 42, 0.08);
+  border-radius: 999px;
+}
+
+body.light-theme {
+  scrollbar-color: rgba(16, 185, 129, 0.72) rgba(15, 23, 42, 0.06);
+}
+
+html:has(body.light-theme)::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.06);
+}
+
+html:has(body.light-theme)::-webkit-scrollbar-thumb {
+  background: rgba(16, 185, 129, 0.72);
+  border-color: rgba(15, 23, 42, 0.06);
+}
+
 body {
   font-family: var(--font-body);
   background-color: var(--bg-primary);
   color: var(--text-primary);
   min-height: 100vh;
   line-height: 1.6;
-  overflow-x: hidden;
+  overflow-x: clip;
+  overflow-y: visible;
+  overscroll-behavior-y: auto;
   position: relative;
   transition: background-color 0.3s ease, color 0.3s ease;
 }
@@ -180,16 +217,10 @@ a:hover {
 .header-container {
   max-width: 1400px;
   margin: 0 auto;
-  padding: calc(var(--fixed-header-height) + 1.5rem) 2rem 1.35rem;
+  padding: 1.5rem 2rem 1.35rem;
 }
 
-.header-sticky-row {
-  position: fixed;
-  top: var(--edit-banner-height);
-  left: 50%;
-  z-index: 50;
-  width: min(1400px, 100%);
-  transform: translateX(-50%);
+.header-main-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -206,74 +237,6 @@ a:hover {
   display: flex;
   align-items: center;
   gap: 1rem;
-}
-
-.brand-logo {
-  width: 48px;
-  height: 48px;
-  background: var(--accent-primary-gradient);
-  border-radius: var(--radius-md);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: var(--font-title);
-  font-size: 1.75rem;
-  font-weight: 800;
-  color: white;
-  box-shadow: 0 0 20px rgba(16, 185, 129, 0.4);
-  overflow: hidden;
-  position: relative;
-  flex: 0 0 48px;
-}
-
-.brand-logo.has-photo {
-  background: var(--bg-tertiary);
-  border: 1px solid rgba(16, 185, 129, 0.45);
-  box-shadow: 0 0 20px rgba(16, 185, 129, 0.18);
-}
-
-.brand-logo img {
-  width: 100%;
-  height: 100%;
-  display: block;
-  object-fit: cover;
-}
-
-.brand-logo-placeholder {
-  display: grid;
-  place-items: center;
-  width: 100%;
-  height: 100%;
-  color: transparent;
-}
-
-.brand-photo-input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
-  pointer-events: none;
-}
-
-body.edit-mode-active .brand-logo {
-  cursor: pointer;
-}
-
-body.edit-mode-active .brand-logo::after {
-  content: '+';
-  position: absolute;
-  right: 4px;
-  bottom: 4px;
-  width: 18px;
-  height: 18px;
-  display: grid;
-  place-items: center;
-  border-radius: 999px;
-  background: var(--accent-primary);
-  color: white;
-  font-size: 0.9rem;
-  line-height: 1;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
 }
 
 .brand-info h1 {
@@ -359,21 +322,44 @@ body.edit-mode-active .btn-ctrl.header-format-btn {
 /* Edit mode active notification banner */
 .edit-banner {
   display: none;
-  background: linear-gradient(90deg, #1e3a8a 0%, #3b82f6 100%);
-  color: white;
-  text-align: center;
-  padding: 0.5rem 1rem;
-  font-size: 0.85rem;
-  font-weight: 600;
-  animation: fadeIn 0.3s ease;
   position: sticky;
   top: 0;
   z-index: 100;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  max-width: 1400px;
+  margin: 0 auto 1rem;
+  background: var(--accent-primary-gradient);
+  color: white;
+  padding: 0.75rem 2rem;
+  border-radius: var(--radius-md);
+  font-size: 0.85rem;
+  font-weight: 600;
+  animation: fadeIn 0.3s ease;
+  box-shadow: 0 10px 24px rgba(16, 185, 129, 0.22);
 }
 
 .edit-banner.active {
-  display: block;
+  display: flex;
+}
+
+.edit-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+}
+
+.edit-banner .btn-ctrl {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.28);
+  color: white;
+}
+
+.edit-banner .btn-ctrl:hover {
+  background: rgba(255, 255, 255, 0.24);
+  border-color: rgba(255, 255, 255, 0.45);
 }
 
 .stats-grid {
@@ -458,6 +444,9 @@ body.edit-mode-active .btn-ctrl.header-format-btn {
   border-radius: var(--radius-lg);
   gap: 0.25rem;
   overflow-x: auto;
+  overflow-y: clip;
+  overscroll-behavior: auto;
+  touch-action: auto;
   scrollbar-width: none;
 }
 
@@ -1194,6 +1183,7 @@ body.light-theme .gallery-item:hover {
   width: 90%;
   margin: auto;
   overflow-y: auto;
+  overscroll-behavior: contain;
   box-shadow: var(--card-shadow);
   color: var(--text-primary);
   outline: none;
@@ -1614,13 +1604,13 @@ body.edit-mode-active #app-main-title {
 }
 
 body.edit-mode-active #app-main-title:empty::before {
-  content: 'Canopée';
+  content: 'Copropro';
   color: var(--text-muted);
   -webkit-text-fill-color: var(--text-muted);
 }
 
 body.edit-mode-active #app-main-subtitle:empty::before {
-  content: '88 rue de Lévis, 75017 Paris — Transition';
+  content: attr(data-placeholder);
   color: var(--text-muted);
 }
 
@@ -1658,6 +1648,7 @@ body.edit-mode-active #app-main-subtitle:empty::before {
   color: var(--text-primary);
   padding: 1.25rem;
   overflow-y: auto;
+  overscroll-behavior: contain;
   box-shadow: var(--card-shadow);
   margin: auto;
 }
@@ -2022,7 +2013,7 @@ body.edit-mode-active .action-point-remove-btn { display: inline-flex; align-ite
   }
 
 /* Markdown prototype overrides */
-html, body { overflow-x: hidden; }
+html, body { overflow-x: clip; }
 body::before, body::after { max-width: 100vw; }
 button.stat-card { text-align: center; font: inherit; color: inherit; cursor: pointer; }
 .app-shell-note,.content-loader-status { color: var(--text-secondary); font-size: .85rem; }
@@ -2048,4 +2039,4 @@ body:not(.edit-mode-active) .action-point-remove-btn { display: none; }
 .new-topic-action-remove { height: 36px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-secondary); color: var(--text-secondary); cursor: pointer; font-size: 1rem; }
 .new-topic-action-remove:hover { color: var(--color-urgent); border-color: var(--color-urgent-border); }
 .new-topic-action-add { padding: .45rem .75rem; }
-@media (max-width:767px){ .app-header{padding-left:0;padding-right:0;} .header-container{padding:calc(var(--fixed-header-height) + 1rem) 1rem 1.35rem;} .dashboard-layout,.controls-bar,.content-loader{padding-left:1rem;padding-right:1rem;} .filter-tabs{width:100%;max-width:100%;overflow-x:auto;display:flex;flex-wrap:nowrap;} .tab-btn{flex:0 0 auto;} .dashboard-layout{overflow:visible;} .topic-card{max-width:100%;} .header-sticky-row{gap:1rem;min-height:auto;padding:1rem;} .header-actions{width:100%;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));} body.edit-mode-active .header-actions{grid-template-columns:repeat(4,minmax(0,1fr));} .btn-ctrl{min-width:0;white-space:normal;} .header-format-btn{padding-left:.55rem;padding-right:.55rem;} }
+@media (max-width:767px){ .app-header{padding-left:0;padding-right:0;} .header-container{padding:1rem 1rem 1.35rem;} .edit-banner{margin-left:1rem;margin-right:1rem;padding:0.75rem 1rem;align-items:flex-start;flex-direction:column;} .dashboard-layout,.controls-bar,.content-loader{padding-left:1rem;padding-right:1rem;} .filter-tabs{width:100%;max-width:100%;overflow-x:auto;display:flex;flex-wrap:nowrap;} .tab-btn{flex:0 0 auto;} .dashboard-layout{overflow:visible;} .topic-card{max-width:100%;} .header-main-row{gap:1rem;min-height:auto;padding:1rem;} .header-actions{width:100%;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));} .edit-banner-actions{width:100%;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));} .btn-ctrl{min-width:0;white-space:normal;} .header-format-btn{padding-left:.55rem;padding-right:.55rem;} }

@@ -1,25 +1,20 @@
 (function clientApp() {
-  const UI_KEY = 'canopee_ui_state_v1';
-  const PHOTO_PREVIEW_KEY = 'canopee_building_photo_preview_v1';
-  const DEFAULT_FILTER = 'Général';
+  const UI_KEY = 'copropro_ui_state_v1';
+  const FALLBACK_FILTER = 'Filtre';
   const MAX_UPLOAD_BYTES = 80 * 1024 * 1024;
-  const BUILDING = {
-    Administratif: 'general',
-    'Bâtiment A (Rue)': 'bat-a',
-    'Bâtiment B (Cour)': 'bat-b',
-    [DEFAULT_FILTER]: 'general'
-  };
+  const TOPIC_STATUSES = new Set(['urgent', 'todo', 'partial', 'resolved']);
   const state = {
     topics: [],
     serverFilters: [],
+    configFilters: [],
+    propertyAddress: '',
+    syndicName: '',
     activeFilter: 'all',
     statFilter: 'active',
     search: '',
     editMode: false,
-    filterLabels: {},
     filterOrder: [],
     extraFilters: [],
-    buildingPhotoUrl: '',
     deletingTopicIds: new Set()
   };
   const els = {};
@@ -28,6 +23,7 @@
 
   async function init() {
     bind();
+    await loadConfig();
     restoreUi();
     bindEvents();
     await loadFromApi();
@@ -52,7 +48,7 @@
       'new-topic-dialog',
       'new-topic-form',
       'new-topic-filter',
-      'new-topic-severity',
+      'new-topic-status',
       'new-topic-title',
       'new-topic-body',
       'new-topic-bold-btn',
@@ -68,13 +64,6 @@
     ].forEach((id) => {
       els[id] = document.getElementById(id);
     });
-    els.logo = document.querySelector('.brand-logo');
-    els.headerRow = document.querySelector('.header-sticky-row');
-    els.logoUploadInput = document.createElement('input');
-    els.logoUploadInput.type = 'file';
-    els.logoUploadInput.accept = 'image/*';
-    els.logoUploadInput.className = 'brand-photo-input';
-    document.body.appendChild(els.logoUploadInput);
   }
 
   function bindEvents() {
@@ -93,7 +82,7 @@
       };
     });
     els['app-main-title'].oninput = saveUi;
-    els['app-main-subtitle'].oninput = saveUi;
+    els['app-main-subtitle'].oninput = saveHeaderConfig;
     els['new-topic-btn'].onclick = openNew;
     els['new-topic-bold-btn'].onclick = () => formatTextareaSelection('bold');
     els['new-topic-list-btn'].onclick = () => formatTextareaSelection('list');
@@ -104,70 +93,155 @@
     els.lightbox.onclick = (event) => {
       if (event.target === els.lightbox) els.lightbox.close();
     };
-    els.logo.onclick = () => {
-      if (state.editMode) els.logoUploadInput.click();
-    };
-    els.logoUploadInput.onchange = async (event) => {
-      await uploadBuildingPhoto(event.target.files && event.target.files[0]);
-      els.logoUploadInput.value = '';
-    };
-    setupTopChromeObserver();
+    document.addEventListener('wheel', rescueTrappedWheel, { capture: true, passive: false });
+  }
+
+  function rescueTrappedWheel(event) {
+    if (!event.deltaY || event.defaultPrevented || hasOpenDialog()) return;
+    const target = event.target instanceof Element ? event.target : event.target && event.target.parentElement;
+    const scroller = target && target.closest('.filter-tabs, .new-topic-dialog, .lightbox-dialog, textarea, [contenteditable="true"]');
+    if (!scroller || !canTrapVerticalScroll(scroller)) return;
+
+    const atTop = scroller.scrollTop <= 0;
+    const atBottom = Math.ceil(scroller.scrollTop + scroller.clientHeight) >= scroller.scrollHeight;
+    if ((event.deltaY < 0 && atTop) || (event.deltaY > 0 && atBottom)) {
+      event.preventDefault();
+      window.scrollBy({ top: event.deltaY, left: 0, behavior: 'auto' });
+    }
+  }
+
+  function hasOpenDialog() {
+    return Boolean((els['new-topic-dialog'] && els['new-topic-dialog'].open) || (els.lightbox && els.lightbox.open));
+  }
+
+  function canTrapVerticalScroll(element) {
+    if (!element || element === document.body || element === document.documentElement) return false;
+    const style = window.getComputedStyle(element);
+    const scrollableY = /(auto|scroll|overlay)/.test(style.overflowY) && element.scrollHeight > element.clientHeight + 1;
+    return scrollableY || element.matches('.filter-tabs, textarea, [contenteditable="true"]');
   }
 
   function restoreUi() {
     try {
       const ui = JSON.parse(localStorage.getItem(UI_KEY) || '{}');
-    if (ui.title) els['app-main-title'].textContent = ui.title;
-      if (ui.subtitle) els['app-main-subtitle'].textContent = ui.subtitle;
-      state.filterLabels = ui.filterLabels || {};
-      state.filterOrder = Array.isArray(ui.filterOrder) ? ui.filterOrder : [];
-      state.extraFilters = Array.isArray(ui.extraFilters) ? ui.extraFilters : [];
-      state.buildingPhotoUrl = localStorage.getItem(PHOTO_PREVIEW_KEY) || '';
+      if (ui.title) els['app-main-title'].textContent = ui.title;
       document.body.classList.toggle('light-theme', ui.theme !== 'dark');
     } catch {
       document.body.classList.add('light-theme');
     }
-    updateLogo();
     initTheme();
+    renderHeaderConfig();
   }
 
   function persistUi() {
     localStorage.setItem(
       UI_KEY,
       JSON.stringify({
-        title: text(els['app-main-title']) || 'Canopée',
-        subtitle: text(els['app-main-subtitle']),
-        theme: document.body.classList.contains('light-theme') ? 'light' : 'dark',
-        filterLabels: state.filterLabels,
-        filterOrder: state.filterOrder,
-        extraFilters: state.extraFilters
+        title: text(els['app-main-title']) || 'Copropro',
+        theme: document.body.classList.contains('light-theme') ? 'light' : 'dark'
       })
     );
   }
 
   function saveUi() {
-    updateLogo();
-    updateTopChromeSpacing();
     persistUi();
   }
 
-  function updateLogo() {
-    els.logo.innerHTML = '';
-    els.logo.title = state.editMode ? 'Changer la photo de l’immeuble' : '';
-    if (state.buildingPhotoUrl) {
-      const image = document.createElement('img');
-      image.src = state.buildingPhotoUrl;
-      image.alt = 'Photo de l’immeuble';
-      els.logo.appendChild(image);
-      els.logo.classList.add('has-photo');
-      return;
+  async function loadConfig() {
+    try {
+      applyConfig(await api('/api/config'));
+    } catch (error) {
+      console.warn(error);
+      try {
+        const response = await fetch('assets/config.md', { cache: 'no-store' });
+        if (!response.ok) throw new Error(`Erreur ${response.status}`);
+        applyConfig(parseConfigMarkdown(await response.text()));
+      } catch (fallbackError) {
+        console.warn(fallbackError);
+        applyConfig({ propertyAddress: '', syndicName: '', filters: [FALLBACK_FILTER] });
+      }
     }
-    els.logo.classList.remove('has-photo');
-    els.logo.innerHTML = '<span class="brand-logo-placeholder" aria-hidden="true"></span>';
+  }
+
+  function applyConfig(config, options = {}) {
+    state.propertyAddress = text(config.propertyAddress ?? config.address ?? '');
+    state.syndicName = text(config.syndicName ?? config.syndic ?? '');
+    state.configFilters = unique((Array.isArray(config.filters) ? config.filters : []).map(text).filter(Boolean));
+    state.filterOrder = state.configFilters.slice();
+    if (options.renderHeader !== false) renderHeaderConfig();
+  }
+
+  function renderHeaderConfig() {
+    if (!els['app-main-subtitle']) return;
+    const subtitle = [state.propertyAddress, state.syndicName].filter(Boolean).join(' — ');
+    els['app-main-subtitle'].textContent = subtitle;
+    els['app-main-subtitle'].dataset.placeholder = subtitle || 'Adresse — Syndic';
+  }
+
+  function saveHeaderConfig() {
+    const raw = text(els['app-main-subtitle']);
+    const parts = raw.split(/\s+[—-]\s+/);
+    state.propertyAddress = parts.shift() || '';
+    state.syndicName = parts.join(' — ');
+    els['app-main-subtitle'].dataset.placeholder = raw || 'Adresse — Syndic';
+    saveConfigDebounced();
+  }
+
+  let configSaveTimer = null;
+  function saveConfigDebounced() {
+    clearTimeout(configSaveTimer);
+    configSaveTimer = setTimeout(saveConfig, 300);
+  }
+
+  async function saveConfig() {
+    try {
+      const config = await api('/api/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          propertyAddress: state.propertyAddress,
+          syndicName: state.syndicName,
+          filters: filters()
+        })
+      });
+      applyConfig(config, { renderHeader: document.activeElement !== els['app-main-subtitle'] });
+      setStatus('Configuration enregistrée dans assets/config.md.', 'ok');
+    } catch (error) {
+      console.error(error);
+      setStatus(error.message || 'Impossible d’écrire assets/config.md.', 'warn');
+    }
+  }
+
+  function parseConfigMarkdown(markdown) {
+    const config = { propertyAddress: '', syndicName: '', filters: [] };
+    let section = '';
+    String(markdown || '').split(/\r?\n/).forEach((line) => {
+      const heading = line.match(/^##\s+(.+)$/);
+      if (heading) {
+        section = heading[1].trim().toLowerCase();
+        return;
+      }
+      const address = line.match(/^Adresse\s*:\s*(.*)$/i);
+      if (address) {
+        config.propertyAddress = text(address[1]);
+        return;
+      }
+      const syndic = line.match(/^Syndic\s*:\s*(.*)$/i);
+      if (syndic) {
+        config.syndicName = text(syndic[1]);
+        return;
+      }
+      const filter = line.match(/^\s*-\s+(.+)$/);
+      if (section === 'filtres' && filter) config.filters.push(text(filter[1]));
+    });
+    return config;
   }
 
   function initTheme() {
-    els['theme-toggle-btn'].textContent = document.body.classList.contains('light-theme') ? '🌙 Thème Sombre' : '☀️ Thème Clair';
+    const isLight = document.body.classList.contains('light-theme');
+    els['theme-toggle-btn'].textContent = isLight ? '🌙' : '☀️';
+    els['theme-toggle-btn'].ariaLabel = isLight ? 'Activer le thème sombre' : 'Activer le thème clair';
+    els['theme-toggle-btn'].title = isLight ? 'Activer le thème sombre' : 'Activer le thème clair';
   }
 
   function toggleTheme() {
@@ -185,29 +259,6 @@
       element.contentEditable = value;
     });
     renderAll();
-    updateLogo();
-    updateTopChromeSpacing();
-  }
-
-  function setupTopChromeObserver() {
-    window.addEventListener('resize', updateTopChromeSpacing);
-    if ('ResizeObserver' in window) {
-      const observer = new ResizeObserver(updateTopChromeSpacing);
-      if (els.headerRow) observer.observe(els.headerRow);
-      if (els['edit-banner']) observer.observe(els['edit-banner']);
-    }
-    updateTopChromeSpacing();
-  }
-
-  function updateTopChromeSpacing() {
-    requestAnimationFrame(() => {
-      const headerHeight = els.headerRow ? Math.ceil(els.headerRow.getBoundingClientRect().height) : 72;
-      const bannerHeight = els['edit-banner'] && els['edit-banner'].classList.contains('active')
-        ? Math.ceil(els['edit-banner'].getBoundingClientRect().height)
-        : 0;
-      document.documentElement.style.setProperty('--fixed-header-height', `${headerHeight}px`);
-      document.documentElement.style.setProperty('--edit-banner-height', `${bannerHeight}px`);
-    });
   }
 
   function bindHeaderFormat(id, command) {
@@ -230,10 +281,10 @@
   async function loadFromApi() {
     try {
       setStatus('Chargement de la web app locale...', 'warn');
-      await loadBuildingPhoto();
       const payload = await api('/api/topics');
       setTopics(payload.topics || []);
       state.serverFilters = Array.isArray(payload.filters) ? payload.filters : [];
+      if (!state.configFilters.length) state.configFilters = state.serverFilters.slice();
       syncFilterOrder();
       setStatus('Web app locale connectée. Les sujets et documents sont enregistrés sur ce serveur.', 'ok');
       return true;
@@ -241,59 +292,6 @@
       console.error(error);
       setStatus('Serveur local indisponible. Lancez la web app avec npm start.', 'warn');
       return false;
-    }
-  }
-
-  async function loadBuildingPhoto() {
-    try {
-      const payload = await api('/api/building-photo');
-      if (payload.url) {
-        state.buildingPhotoUrl = `${payload.url}?v=${Date.now()}`;
-        localStorage.removeItem(PHOTO_PREVIEW_KEY);
-        updateLogo();
-      }
-    } catch (error) {
-      console.error(error);
-    }
-  }
-
-  async function uploadBuildingPhoto(file) {
-    if (!file) return;
-    if (file.size > MAX_UPLOAD_BYTES) {
-      setStatus(`Image trop volumineuse. Taille maximale : ${formatBytes(MAX_UPLOAD_BYTES)}.`, 'warn');
-      return;
-    }
-    try {
-      const previewDataUrl = await fileToDataUrl(file);
-      state.buildingPhotoUrl = previewDataUrl;
-      updateLogo();
-      try {
-        localStorage.setItem(PHOTO_PREVIEW_KEY, previewDataUrl);
-      } catch {
-        localStorage.removeItem(PHOTO_PREVIEW_KEY);
-      }
-      setStatus('Photo affichée dans le carré. Enregistrement dans assets...', 'warn');
-
-      const formData = new FormData();
-      formData.append('photo', file);
-      const payload = await api('/api/building-photo', {
-        method: 'POST',
-        body: formData
-      });
-      if (payload.url) {
-        state.buildingPhotoUrl = `${payload.url}?v=${Date.now()}`;
-        localStorage.removeItem(PHOTO_PREVIEW_KEY);
-        updateLogo();
-      }
-      setStatus('Photo de l’immeuble enregistrée dans assets.', 'ok');
-    } catch (error) {
-      console.error(error);
-      updateLogo();
-      const normalizedMessage = String(error.message || '').toLowerCase();
-      const restartHint = normalizedMessage.includes('methode non autorisee') || normalizedMessage.includes('méthode non autorisée')
-        ? 'Photo affichée en aperçu. Redémarrez la web app pour l’enregistrer dans assets.'
-        : error.message || 'Photo affichée en aperçu, mais impossible de l’enregistrer dans assets.';
-      setStatus(restartHint, 'warn');
     }
   }
 
@@ -314,17 +312,14 @@
   }
 
   function norm(topic) {
-    const filter = topic.filter || topic.folder || DEFAULT_FILTER;
+    const filter = topic.filter || topic.folder || defaultFilter();
     return {
       id: topic.id || `topic-${Date.now()}`,
       title: topic.title || 'Nouveau sujet',
       createdAt: topic.createdAt || '',
       filter,
       folder: topic.folder || filter,
-      building: topic.building || BUILDING[filter] || 'general',
-      location: topic.location || filter,
-      severity: topic.severity === 'urgent' ? 'urgent' : 'warning',
-      status: topic.status || 'todo',
+      status: topicStatus(topic),
       sourceFile: topic.sourceFile || `${topic.id || Date.now()}.md`,
       body: topic.body || 'Contexte à compléter.',
       notes: topic.notes || '',
@@ -345,26 +340,31 @@
     renderExplorer();
     stats();
     fillNewFilters();
-    updateTopChromeSpacing();
   }
 
   function filters() {
-    let available = Array.from(new Set([...state.serverFilters, ...state.topics.map((topic) => topic.filter), ...state.extraFilters])).filter(Boolean);
-    if (!available.length) available = [DEFAULT_FILTER];
-    const ordered = state.filterOrder.filter((filter) => available.includes(filter));
+    let available = unique([...state.configFilters, ...state.serverFilters, ...state.topics.map((topic) => topic.filter), ...state.extraFilters].filter(Boolean));
+    if (!available.length) available = [defaultFilter()];
+    const configuredOrder = state.configFilters.length ? state.configFilters : state.filterOrder;
+    const ordered = configuredOrder.filter((filter) => available.includes(filter));
     const rest = available.filter((filter) => !ordered.includes(filter)).sort((a, b) => a.localeCompare(b, 'fr'));
     return [...ordered, ...rest];
+  }
+
+  function defaultFilter() {
+    return state.configFilters[0] || state.serverFilters[0] || FALLBACK_FILTER;
   }
 
   function syncFilterOrder() {
     const list = filters();
     state.filterOrder = list;
+    state.configFilters = list;
     state.extraFilters = state.extraFilters.filter((filter) => list.includes(filter));
     persistUi();
   }
 
   function label(filter) {
-    return state.filterLabels[filter] || filter;
+    return filter;
   }
 
   function renderFilters() {
@@ -455,6 +455,7 @@
         body: JSON.stringify({ name })
       });
       state.serverFilters = payload.filters || state.serverFilters;
+      state.configFilters = payload.filters || state.configFilters;
       state.activeFilter = name;
       syncFilterOrder();
       setStatus(`Filtre ajouté : ${name}`, 'ok');
@@ -473,6 +474,7 @@
     try {
       const payload = await api(`/api/filters/${encodeURIComponent(filter)}`, { method: 'DELETE' });
       state.serverFilters = payload.filters || [];
+      state.configFilters = payload.filters || state.configFilters.filter((item) => item !== filter);
       state.extraFilters = state.extraFilters.filter((item) => item !== filter);
       state.filterOrder = state.filterOrder.filter((item) => item !== filter);
       if (state.activeFilter === filter) state.activeFilter = 'all';
@@ -499,10 +501,10 @@
       });
       setTopics(payload.topics || state.topics);
       state.serverFilters = payload.filters || state.serverFilters.map((filter) => (filter === oldFilter ? next : filter));
+      state.configFilters = payload.filters || state.configFilters.map((filter) => (filter === oldFilter ? next : filter));
       state.extraFilters = state.extraFilters.map((filter) => (filter === oldFilter ? next : filter));
       state.filterOrder = state.filterOrder.map((filter) => (filter === oldFilter ? next : filter));
       if (state.activeFilter === oldFilter) state.activeFilter = next;
-      delete state.filterLabels[oldFilter];
       persistUi();
       setStatus(`Filtre renommé : ${next}`, 'ok');
       renderAll();
@@ -544,8 +546,9 @@
     if (from < to) to -= 1;
     list.splice(to, 0, source);
     state.filterOrder = list;
+    state.configFilters = list;
     state.dragFilter = null;
-    persistUi();
+    saveConfigDebounced();
     renderAll();
   }
 
@@ -556,8 +559,8 @@
       const statOk =
         state.statFilter === 'active'
           ? currentStatus !== 'resolved'
-          : state.statFilter === 'urgent'
-            ? topic.severity === 'urgent' && currentStatus !== 'resolved'
+        : state.statFilter === 'urgent'
+            ? currentStatus === 'urgent'
             : state.statFilter === 'todo'
               ? currentStatus === 'todo'
               : state.statFilter === 'partial'
@@ -565,7 +568,7 @@
                 : state.statFilter === 'resolved'
                   ? currentStatus === 'resolved'
                   : true;
-      const haystack = `${topic.title} ${topic.location} ${topic.body} ${topic.notes} ${topic.documents.map((document) => `${document.label} ${document.href}`).join(' ')}`.toLowerCase();
+      const haystack = `${topic.title} ${topic.filter} ${topic.body} ${topic.notes} ${topic.documents.map((document) => `${document.label} ${document.href}`).join(' ')}`.toLowerCase();
       return filterOk && statOk && (!state.search || haystack.includes(state.search));
     });
   }
@@ -594,16 +597,16 @@
   function card(topic) {
     const container = document.createElement('article');
     const currentStatus = status(topic);
-    container.className = `topic-card ${topic.severity === 'urgent' ? 'highlight-urgent' : 'highlight-warning'}`;
+    container.className = `topic-card ${currentStatus === 'urgent' ? 'highlight-urgent' : 'highlight-warning'}`;
     container.classList.toggle('is-partial', currentStatus === 'partial');
     container.classList.toggle('is-resolved', currentStatus === 'resolved');
-    container.innerHTML = `<div class="card-header"><div class="card-title-group"><span class="location-tag"></span><h3 data-edit="title"></h3></div><div class="card-meta-badges"><span class="badge ${badgeClass(currentStatus, topic.severity)}">${badgeText(currentStatus, topic.severity)}</span></div></div>`;
+    container.innerHTML = `<div class="card-header"><div class="card-title-group"><span class="location-tag"></span><h3 data-edit="title"></h3></div><div class="card-meta-badges"><span class="badge ${badgeClass(currentStatus)}">${badgeText(currentStatus)}</span></div></div>`;
 
     const location = container.querySelector('.location-tag');
     const heading = container.querySelector('h3');
     const titleGroup = container.querySelector('.card-title-group');
     const metaBadges = container.querySelector('.card-meta-badges');
-    location.textContent = topic.location;
+    location.textContent = label(topic.filter);
     heading.textContent = topic.title;
     heading.contentEditable = state.editMode;
     heading.onkeydown = enterBlur;
@@ -846,7 +849,7 @@
       if (currentStatus === 'resolved') counts.resolved += 1;
       else {
         counts.active += 1;
-        if (topic.severity === 'urgent') counts.urgent += 1;
+        if (currentStatus === 'urgent') counts.urgent += 1;
         if (currentStatus === 'partial') counts.partial += 1;
         if (currentStatus === 'todo') counts.todo += 1;
       }
@@ -866,16 +869,24 @@
   }
 
   function status(topic) {
-    const done = topic.actions.filter((action) => action.done).length;
-    return done && done === topic.actions.length ? 'resolved' : done ? 'partial' : 'todo';
+    return topicStatus(topic);
   }
 
-  function badgeClass(currentStatus, severity) {
-    return currentStatus === 'resolved' ? 'success' : currentStatus === 'partial' ? 'info' : severity === 'urgent' ? 'urgent' : 'warning';
+  function topicStatus(topic) {
+    const actions = Array.isArray(topic.actions) ? topic.actions : [];
+    const done = actions.filter((action) => action.done).length;
+    if (done && done === actions.length) return 'resolved';
+    if (done) return 'partial';
+    if (TOPIC_STATUSES.has(topic.status)) return topic.status;
+    return 'todo';
   }
 
-  function badgeText(currentStatus, severity) {
-    return currentStatus === 'resolved' ? 'Traité' : currentStatus === 'partial' ? 'Partiellement traité' : severity === 'urgent' ? 'Urgent / Critique' : 'À Traiter';
+  function badgeClass(currentStatus) {
+    return currentStatus === 'resolved' ? 'success' : currentStatus === 'partial' ? 'info' : currentStatus === 'urgent' ? 'urgent' : 'warning';
+  }
+
+  function badgeText(currentStatus) {
+    return currentStatus === 'resolved' ? 'Traité' : currentStatus === 'partial' ? 'Partiellement traité' : currentStatus === 'urgent' ? 'Urgent / Critique' : 'À Traiter';
   }
 
   async function update(topic, patch) {
@@ -1056,7 +1067,7 @@
 
   async function createNew(event) {
     event.preventDefault();
-    const filter = els['new-topic-filter'].value || DEFAULT_FILTER;
+    const filter = els['new-topic-filter'].value || defaultFilter();
     try {
       const payload = await api('/api/topics', {
         method: 'POST',
@@ -1064,13 +1075,14 @@
         body: JSON.stringify({
           filter,
           title: text(els['new-topic-title']) || 'Nouveau sujet',
-          severity: els['new-topic-severity'].value === 'urgent' ? 'urgent' : 'warning',
+          status: TOPIC_STATUSES.has(els['new-topic-status'].value) ? els['new-topic-status'].value : 'todo',
           body: text(els['new-topic-body']) || 'Contexte à compléter.',
           actions: getNewActions()
         })
       });
       replaceTopic(payload.topic);
       state.serverFilters = payload.filters || state.serverFilters;
+      state.configFilters = payload.filters || state.configFilters;
       syncFilterOrder();
       els['new-topic-dialog'].close();
       setStatus(`Sujet créé : ${payload.topic.sourceFile}`, 'ok');
@@ -1096,6 +1108,10 @@
   function text(element) {
     if (element == null) return '';
     return String(element.value ?? element.textContent ?? element).replace(/\s+/g, ' ').trim();
+  }
+
+  function unique(values) {
+    return Array.from(new Set(values));
   }
 
   function formatDate(value) {

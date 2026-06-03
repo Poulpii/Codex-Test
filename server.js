@@ -7,16 +7,11 @@ const ROOT = __dirname;
 const CONTENTS_DIR = path.join(ROOT, 'Contents');
 const DOCUMENTS_DIR = path.join(ROOT, 'Documents');
 const ASSETS_DIR = path.join(ROOT, 'assets');
-const DEFAULT_FILTER = 'Général';
-const BUILDING = {
-  Administratif: 'general',
-  'Batiment A (Rue)': 'bat-a',
-  'Bâtiment A (Rue)': 'bat-a',
-  'Batiment B (Cour)': 'bat-b',
-  'Bâtiment B (Cour)': 'bat-b',
-  General: 'general',
-  Général: 'general'
-};
+const CONFIG_FILE = path.join(ASSETS_DIR, 'config.md');
+const FALLBACK_FILTER = 'Filtre';
+const DEFAULT_PROPERTY_ADDRESS = '';
+const DEFAULT_SYNDIC_NAME = '';
+const TOPIC_STATUSES = new Set(['urgent', 'todo', 'partial', 'resolved']);
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || '127.0.0.1';
 const MAX_UPLOAD_BYTES = 80 * 1024 * 1024;
@@ -30,6 +25,10 @@ async function main() {
   await fs.mkdir(CONTENTS_DIR, { recursive: true });
   await fs.mkdir(DOCUMENTS_DIR, { recursive: true });
   await fs.mkdir(ASSETS_DIR, { recursive: true });
+  await ensureConfig();
+  for (const filter of (await readConfig()).filters) {
+    await fs.mkdir(path.join(CONTENTS_DIR, filter), { recursive: true });
+  }
 
   const server = http.createServer((req, res) => {
     route(req, res).catch((error) => {
@@ -59,9 +58,9 @@ async function route(req, res) {
   const pathname = decodeURIComponent(url.pathname);
 
   if (pathname === '/api/topics' && req.method === 'GET') return listTopics(res);
+  if (pathname === '/api/config' && req.method === 'GET') return getConfig(res);
+  if (pathname === '/api/config' && req.method === 'PUT') return updateConfig(req, res);
   if (pathname === '/api/topics' && req.method === 'POST') return createTopic(req, res);
-  if (pathname === '/api/building-photo' && req.method === 'GET') return getBuildingPhoto(res);
-  if (pathname === '/api/building-photo' && req.method === 'POST') return uploadBuildingPhoto(req, res);
   if (pathname.startsWith('/api/topics/') && pathname.endsWith('/attachments') && req.method === 'POST') {
     return addAttachments(req, res, pathname);
   }
@@ -83,29 +82,29 @@ async function listTopics(res) {
   sendJson(res, 200, payload);
 }
 
-async function getBuildingPhoto(res) {
-  const fileName = await findBuildingPhotoFile();
-  sendJson(res, 200, { url: fileName ? `assets/${fileName}` : '' });
+async function getConfig(res) {
+  sendJson(res, 200, await readConfig());
 }
 
-async function uploadBuildingPhoto(req, res) {
-  const files = await readMultipartFiles(req);
-  const file = files[0];
-  if (!file) return sendJson(res, 400, { error: 'Aucune image recue.' });
-  if (!(file.contentType || '').startsWith('image/')) {
-    return sendJson(res, 400, { error: 'Le fichier doit etre une image.' });
+async function updateConfig(req, res) {
+  const current = await readConfig();
+  const data = await readJson(req);
+  const next = {
+    propertyAddress: text(data.propertyAddress ?? data.address ?? current.propertyAddress),
+    syndicName: text(data.syndicName ?? data.syndic ?? current.syndicName),
+    filters: uniqueStrings(Array.isArray(data.filters) ? data.filters.map(safeFilterName) : current.filters)
+  };
+  if (!next.filters.length) next.filters = [FALLBACK_FILTER];
+  for (const filter of next.filters) {
+    await fs.mkdir(path.join(CONTENTS_DIR, filter), { recursive: true });
   }
-
-  const ext = imageExtension(file.filename, file.contentType);
-  const fileName = `building-photo${ext}`;
-  await removeBuildingPhotoFiles();
-  await fs.writeFile(path.join(ASSETS_DIR, fileName), file.buffer);
-  sendJson(res, 200, { url: `assets/${fileName}` });
+  await writeConfig(next);
+  sendJson(res, 200, await readConfig());
 }
 
 async function createTopic(req, res) {
   const data = await readJson(req);
-  const filter = safeFilterName(data.filter || DEFAULT_FILTER);
+  const filter = safeFilterName(data.filter || await defaultFilterName());
   const title = text(data.title) || 'Nouveau sujet';
   const createdAt = todayIso();
   const sourceFile = await uniqueMarkdownFile(filter, topicMarkdownFileName(createdAt, title));
@@ -115,10 +114,7 @@ async function createTopic(req, res) {
     createdAt,
     filter,
     folder: filter,
-    building: BUILDING[filter] || 'general',
-    location: filter,
-    severity: data.severity === 'urgent' ? 'urgent' : 'warning',
-    status: 'todo',
+    status: topicStatus(data),
     sourceFile,
     body: text(data.body) || 'Contexte a completer.',
     notes: '',
@@ -198,6 +194,11 @@ async function createFilter(req, res) {
   const name = safeFilterName(data.name || '');
   if (!name) return sendJson(res, 400, { error: 'Nom de filtre manquant.' });
   await fs.mkdir(path.join(CONTENTS_DIR, name), { recursive: true });
+  const config = await readConfig();
+  if (!config.filters.includes(name)) {
+    config.filters.push(name);
+    await writeConfig(config);
+  }
   sendJson(res, 201, { filters: await listFilterFolders() });
 }
 
@@ -220,9 +221,12 @@ async function renameFilter(req, res, pathname) {
   for (const topic of payload.topics.filter((topic) => topic.filter === oldName || topic.folder === oldName)) {
     topic.filter = nextName;
     topic.folder = nextName;
-    if (topic.location === oldName) topic.location = nextName;
     await writeTopic(topic);
   }
+  const config = await readConfig();
+  config.filters = uniqueStrings(config.filters.map((filter) => (filter === oldName ? nextName : filter)));
+  if (!config.filters.includes(nextName)) config.filters.push(nextName);
+  await writeConfig(config);
   sendJson(res, 200, await readAllTopics());
 }
 
@@ -236,6 +240,10 @@ async function deleteFilter(res, pathname) {
     return sendJson(res, 409, { error: 'Ce filtre contient des sujets.' });
   }
   await fs.rm(dir, { recursive: true, force: true });
+  const config = await readConfig();
+  config.filters = config.filters.filter((filter) => filter !== name);
+  if (!config.filters.length) config.filters = [FALLBACK_FILTER];
+  await writeConfig(config);
   sendJson(res, 200, { filters: await listFilterFolders() });
 }
 
@@ -258,8 +266,90 @@ async function readAllTopics() {
 }
 
 async function listFilterFolders() {
+  const config = await readConfig();
+  const folders = await listFilterDirs();
+  return uniqueStrings([...config.filters, ...folders]);
+}
+
+async function listFilterDirs() {
   const entries = await fs.readdir(CONTENTS_DIR, { withFileTypes: true }).catch(() => []);
   return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort((a, b) => a.localeCompare(b, 'fr'));
+}
+
+async function ensureConfig() {
+  try {
+    await fs.access(CONFIG_FILE);
+  } catch {
+    await writeConfig({
+      propertyAddress: DEFAULT_PROPERTY_ADDRESS,
+      syndicName: DEFAULT_SYNDIC_NAME,
+      filters: await listFilterDirs()
+    });
+  }
+}
+
+async function readConfig() {
+  await fs.mkdir(ASSETS_DIR, { recursive: true });
+  await ensureConfig();
+  const md = await fs.readFile(CONFIG_FILE, 'utf8');
+  const parsed = parseConfig(md);
+  const folders = await listFilterDirs();
+  const filters = uniqueStrings([...(parsed.filters.length ? parsed.filters : []), ...folders]);
+  return {
+    propertyAddress: parsed.propertyAddress || DEFAULT_PROPERTY_ADDRESS,
+    syndicName: parsed.syndicName || DEFAULT_SYNDIC_NAME,
+    filters: filters.length ? filters : [FALLBACK_FILTER]
+  };
+}
+
+async function defaultFilterName() {
+  const config = await readConfig();
+  return config.filters[0] || FALLBACK_FILTER;
+}
+
+async function writeConfig(config) {
+  const filters = uniqueStrings((config.filters || []).map(safeFilterName));
+  const lines = [
+    '# Configuration',
+    '',
+    '## Copropriété',
+    '',
+    `Adresse: ${text(config.propertyAddress)}`,
+    `Syndic: ${text(config.syndicName)}`,
+    '',
+    '## Filtres',
+    ''
+  ];
+  (filters.length ? filters : [FALLBACK_FILTER]).forEach((filter) => lines.push(`- ${filter}`));
+  lines.push('');
+  await fs.mkdir(ASSETS_DIR, { recursive: true });
+  await fs.writeFile(CONFIG_FILE, lines.join('\n'), 'utf8');
+}
+
+function parseConfig(md) {
+  const data = { propertyAddress: '', syndicName: '', filters: [] };
+  let section = '';
+  String(md || '').split(/\r?\n/).forEach((line) => {
+    const heading = line.match(/^##\s+(.+)$/);
+    if (heading) {
+      section = heading[1].trim().toLowerCase();
+      return;
+    }
+    const address = line.match(/^Adresse\s*:\s*(.*)$/i);
+    if (address) {
+      data.propertyAddress = text(address[1]);
+      return;
+    }
+    const syndic = line.match(/^Syndic\s*:\s*(.*)$/i);
+    if (syndic) {
+      data.syndicName = text(syndic[1]);
+      return;
+    }
+    const filter = line.match(/^\s*-\s+(.+)$/);
+    if (section === 'filtres' && filter) data.filters.push(safeFilterName(filter[1]));
+  });
+  data.filters = uniqueStrings(data.filters);
+  return data;
 }
 
 async function findTopic(id) {
@@ -270,7 +360,7 @@ async function findTopic(id) {
 }
 
 function topicPath(topic) {
-  const filter = safeFilterName(topic.filter || topic.folder || DEFAULT_FILTER);
+  const filter = safeFilterName(topic.filter || topic.folder || FALLBACK_FILTER);
   const file = safeMarkdownFileName(topic.sourceFile || `${safeFileName(topic.id || Date.now())}.md`);
   const filePath = path.join(CONTENTS_DIR, filter, file);
   if (!isInside(CONTENTS_DIR, filePath)) throw Object.assign(new Error('Chemin de sujet invalide.'), { status: 400 });
@@ -305,20 +395,6 @@ async function uniqueDocumentFile(fileName) {
     i += 1;
   }
   return candidate;
-}
-
-async function findBuildingPhotoFile() {
-  const entries = await fs.readdir(ASSETS_DIR).catch(() => []);
-  return entries.find((entry) => /^building-photo\.(png|jpe?g|gif|webp|avif)$/i.test(entry)) || '';
-}
-
-async function removeBuildingPhotoFiles() {
-  const entries = await fs.readdir(ASSETS_DIR).catch(() => []);
-  await Promise.all(
-    entries
-      .filter((entry) => /^building-photo\.(png|jpe?g|gif|webp|avif)$/i.test(entry))
-      .map((entry) => fs.rm(path.join(ASSETS_DIR, entry), { force: true }))
-  );
 }
 
 function imageExtension(fileName, contentType) {
@@ -511,24 +587,21 @@ function parseSections(md) {
 }
 
 function normTopic(topic) {
-  const filter = safeFilterName(topic.filter || topic.folder || DEFAULT_FILTER);
+  const filter = safeFilterName(topic.filter || topic.folder || FALLBACK_FILTER);
   const next = {
     id: topic.id || `topic-${Date.now()}`,
     title: text(topic.title) || 'Nouveau sujet',
     createdAt: topic.createdAt || '',
     filter,
     folder: filter,
-    building: topic.building || BUILDING[filter] || 'general',
-    location: topic.location || filter,
-    severity: topic.severity === 'urgent' ? 'urgent' : 'warning',
-    status: topic.status || 'todo',
+    status: topicStatus(topic),
     sourceFile: safeMarkdownFileName(topic.sourceFile || `${topic.id || Date.now()}.md`),
     body: topic.body || 'Contexte à compléter.',
     notes: topic.notes || '',
     documents: Array.isArray(topic.documents) ? topic.documents.map(normDocument) : [],
     actions: normActions(topic.actions)
   };
-  next.status = status(next);
+  next.status = topicStatus(next);
   return next;
 }
 
@@ -554,10 +627,7 @@ function serialize(topic) {
   if (topic.createdAt) lines.push(`createdAt: ${yq(topic.createdAt)}`);
   lines.push(
     `filter: ${yq(topic.filter)}`,
-    `building: ${yq(topic.building)}`,
-    `location: ${yq(topic.location)}`,
-    `severity: ${yq(topic.severity)}`,
-    `status: ${yq(status(topic))}`,
+    `status: ${yq(topicStatus(topic))}`,
     `sourceFile: ${yq(topic.sourceFile)}`,
     'documents:'
   );
@@ -577,9 +647,13 @@ function serialize(topic) {
   return lines.join('\n');
 }
 
-function status(topic) {
-  const done = topic.actions.filter((action) => action.done).length;
-  return done && done === topic.actions.length ? 'resolved' : done ? 'partial' : 'todo';
+function topicStatus(topic) {
+  const actions = Array.isArray(topic.actions) ? topic.actions : [];
+  const done = actions.filter((action) => action.done).length;
+  if (done && done === actions.length) return 'resolved';
+  if (done) return 'partial';
+  if (TOPIC_STATUSES.has(topic.status)) return topic.status;
+  return 'todo';
 }
 
 function topicMarkdownFileName(dateIso, title) {
@@ -594,7 +668,7 @@ function todayIso() {
 }
 
 function safeFilterName(name) {
-  return text(name).replace(/[\\/:*?"<>|\x00-\x1F]/g, '-').replace(/^\.+$/g, '').slice(0, 100) || DEFAULT_FILTER;
+  return text(name).replace(/[\\/:*?"<>|\x00-\x1F]/g, '-').replace(/^\.+$/g, '').slice(0, 100) || FALLBACK_FILTER;
 }
 
 function safeFileName(name) {
@@ -620,6 +694,10 @@ function fileTitle(value) {
 
 function text(value) {
   return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function uniqueStrings(values) {
+  return Array.from(new Set((values || []).map(text).filter(Boolean)));
 }
 
 function yq(value) {
