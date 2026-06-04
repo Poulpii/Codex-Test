@@ -1,6 +1,6 @@
 # Suivi Copro Local
 
-![Capture d’écran de Copropro](Screenshot%20%20Copropro%20%E2%80%94%20Sujets%20de%20Coproprie%CC%81te%CC%81.png)
+![Capture d’écran de Copropro](Copropro.png)
 
 Application web locale pour suivre les sujets d’une copropriété : incidents, demandes, documents, actions à mener et état d’avancement.
 
