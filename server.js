@@ -15,19 +15,47 @@ const TOPIC_STATUSES = new Set(['urgent', 'todo', 'partial', 'resolved']);
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || '127.0.0.1';
 const MAX_UPLOAD_BYTES = 80 * 1024 * 1024;
-
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+const ACCESS_TOKEN = process.env.COPROPRO_ACCESS_TOKEN || '';
+const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
+const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif']);
+const INLINE_DOCUMENT_EXTENSIONS = new Set([...IMAGE_EXTENSIONS, '.pdf']);
+const ALLOWED_ATTACHMENT_EXTENSIONS = new Set([
+  ...IMAGE_EXTENSIONS,
+  '.pdf',
+  '.eml',
+  '.msg',
+  '.txt',
+  '.md',
+  '.csv',
+  '.rtf',
+  '.doc',
+  '.docx',
+  '.xls',
+  '.xlsx',
+  '.ppt',
+  '.pptx'
+]);
+const BLOCKED_DOCUMENT_EXTENSIONS = new Set(['.html', '.htm', '.xhtml', '.svg', '.js', '.mjs', '.css', '.xml']);
+const SECURITY_HEADERS = {
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'no-referrer',
+  'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'"
+};
 
 async function main() {
+  if (requiresAccessToken() && !ACCESS_TOKEN) {
+    console.error('Partage reseau refuse sans protection. Definissez COPROPRO_ACCESS_TOKEN avant de lancer avec HOST non local.');
+    process.exit(1);
+  }
+
   await fs.mkdir(CONTENTS_DIR, { recursive: true });
   await fs.mkdir(DOCUMENTS_DIR, { recursive: true });
   await fs.mkdir(ASSETS_DIR, { recursive: true });
   await ensureConfig();
+  await migrateYearFolders();
   for (const filter of (await readConfig()).filters) {
-    await fs.mkdir(path.join(CONTENTS_DIR, filter), { recursive: true });
+    await fs.mkdir(path.join(CONTENTS_DIR, currentYear(), filter), { recursive: true });
   }
 
   const server = http.createServer((req, res) => {
@@ -49,6 +77,8 @@ async function main() {
     console.log(`Suivi Copro local: http://${HOST}:${PORT}`);
     if (HOST === '127.0.0.1') {
       console.log('Pour partager sur le reseau local: HOST=0.0.0.0 npm start');
+    } else if (ACCESS_TOKEN) {
+      console.log('Acces reseau protege par COPROPRO_ACCESS_TOKEN. Ouvrez la page avec ?token=VOTRE_TOKEN.');
     }
   });
 }
@@ -56,6 +86,10 @@ async function main() {
 async function route(req, res) {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const pathname = decodeURIComponent(url.pathname);
+
+  if (needsAccessToken(pathname) && !authorized(req, url)) {
+    return sendJson(res, 401, { error: 'Acces non autorise.' });
+  }
 
   if (pathname === '/api/topics' && req.method === 'GET') return listTopics(res);
   if (pathname === '/api/config' && req.method === 'GET') return getConfig(res);
@@ -96,7 +130,7 @@ async function updateConfig(req, res) {
   };
   if (!next.filters.length) next.filters = [FALLBACK_FILTER];
   for (const filter of next.filters) {
-    await fs.mkdir(path.join(CONTENTS_DIR, filter), { recursive: true });
+    await fs.mkdir(path.join(CONTENTS_DIR, currentYear(), filter), { recursive: true });
   }
   await writeConfig(next);
   sendJson(res, 200, await readConfig());
@@ -105,11 +139,13 @@ async function updateConfig(req, res) {
 async function createTopic(req, res) {
   const data = await readJson(req);
   const filter = safeFilterName(data.filter || await defaultFilterName());
-  const title = text(data.title) || 'Nouveau sujet';
+  const number = await nextTopicNumber();
+  const fileId = String(number).padStart(4, '0');
+  const title = numberedTitle(number, text(data.title) || 'Nouveau sujet');
   const createdAt = todayIso();
-  const sourceFile = await uniqueMarkdownFile(filter, topicMarkdownFileName(createdAt, title));
+  const sourceFile = await uniqueMarkdownFile(yearFromDate(createdAt), filter, `${fileId}-${topicMarkdownFileName(createdAt, stripTopicNumber(title))}`);
   const topic = normTopic({
-    id: `topic-${Date.now()}`,
+    id: fileId,
     title,
     createdAt,
     filter,
@@ -152,13 +188,16 @@ async function addAttachments(req, res, pathname) {
   if (!files.length) return sendJson(res, 400, { error: 'Aucun fichier recu.' });
 
   const topic = found.topic;
+  const year = topicYear(topic);
   for (const file of files) {
+    validateAttachment(file);
     const safeName = safeFileName(file.filename || 'piece-jointe');
-    const finalName = await uniqueDocumentFile(safeName);
-    await fs.writeFile(path.join(DOCUMENTS_DIR, finalName), file.buffer);
+    const finalName = await uniqueDocumentFile(year, safeName);
+    await fs.mkdir(path.join(DOCUMENTS_DIR, year), { recursive: true });
+    await fs.writeFile(path.join(DOCUMENTS_DIR, year, finalName), file.buffer);
     topic.documents.push({
       label: file.filename || finalName,
-      href: `Documents/${finalName}`,
+      href: documentHref(year, finalName),
       type: (file.contentType || '').startsWith('image/') ? 'image' : 'file',
       description: 'Piece jointe enregistree dans le dossier Documents.'
     });
@@ -193,7 +232,7 @@ async function createFilter(req, res) {
   const data = await readJson(req);
   const name = safeFilterName(data.name || '');
   if (!name) return sendJson(res, 400, { error: 'Nom de filtre manquant.' });
-  await fs.mkdir(path.join(CONTENTS_DIR, name), { recursive: true });
+  await fs.mkdir(path.join(CONTENTS_DIR, currentYear(), name), { recursive: true });
   const config = await readConfig();
   if (!config.filters.includes(name)) {
     config.filters.push(name);
@@ -209,13 +248,17 @@ async function renameFilter(req, res, pathname) {
   if (!oldName || !nextName) return sendJson(res, 400, { error: 'Nom de filtre invalide.' });
   if (oldName === nextName) return sendJson(res, 200, await readAllTopics());
 
-  const oldDir = path.join(CONTENTS_DIR, oldName);
-  const nextDir = path.join(CONTENTS_DIR, nextName);
-  if (!isInside(CONTENTS_DIR, oldDir) || !isInside(CONTENTS_DIR, nextDir)) {
-    return sendJson(res, 400, { error: 'Chemin de filtre invalide.' });
+  const oldDirs = await filterDirsForName(oldName);
+  for (const oldDir of oldDirs) {
+    const nextDir = path.join(path.dirname(oldDir), nextName);
+    if (!isInside(CONTENTS_DIR, oldDir) || !isInside(CONTENTS_DIR, nextDir)) {
+      return sendJson(res, 400, { error: 'Chemin de filtre invalide.' });
+    }
+    if (fss.existsSync(nextDir)) return sendJson(res, 409, { error: 'Un filtre porte deja ce nom.' });
   }
-  if (fss.existsSync(nextDir)) return sendJson(res, 409, { error: 'Un filtre porte deja ce nom.' });
-  await fs.rename(oldDir, nextDir);
+  for (const oldDir of oldDirs) {
+    await fs.rename(oldDir, path.join(path.dirname(oldDir), nextName));
+  }
 
   const payload = await readAllTopics();
   for (const topic of payload.topics.filter((topic) => topic.filter === oldName || topic.folder === oldName)) {
@@ -233,13 +276,15 @@ async function renameFilter(req, res, pathname) {
 async function deleteFilter(res, pathname) {
   const name = safeFilterName(pathname.split('/').slice(3).join('/'));
   if (!name) return sendJson(res, 400, { error: 'Nom de filtre manquant.' });
-  const dir = path.join(CONTENTS_DIR, name);
-  if (!isInside(CONTENTS_DIR, dir)) return sendJson(res, 400, { error: 'Chemin de filtre invalide.' });
-  const entries = await fs.readdir(dir).catch(() => []);
-  if (entries.some((entry) => entry.toLowerCase().endsWith('.md'))) {
+  const dirs = await filterDirsForName(name);
+  for (const dir of dirs) {
+    if (!isInside(CONTENTS_DIR, dir)) return sendJson(res, 400, { error: 'Chemin de filtre invalide.' });
+  }
+  const entriesByDir = await Promise.all(dirs.map((dir) => fs.readdir(dir).catch(() => [])));
+  if (entriesByDir.some((entries) => entries.some((entry) => entry.toLowerCase().endsWith('.md')))) {
     return sendJson(res, 409, { error: 'Ce filtre contient des sujets.' });
   }
-  await fs.rm(dir, { recursive: true, force: true });
+  await Promise.all(dirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
   const config = await readConfig();
   config.filters = config.filters.filter((filter) => filter !== name);
   if (!config.filters.length) config.filters = [FALLBACK_FILTER];
@@ -251,18 +296,84 @@ async function readAllTopics() {
   await fs.mkdir(CONTENTS_DIR, { recursive: true });
   const filters = await listFilterFolders();
   const topics = [];
-  for (const filter of filters) {
-    const dir = path.join(CONTENTS_DIR, filter);
-    const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
-    for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.md')) continue;
-      const filePath = path.join(dir, entry.name);
-      const markdown = await fs.readFile(filePath, 'utf8');
-      topics.push(parseMd(markdown, { folder: filter, fileName: entry.name }));
+  const files = await topicFiles();
+  for (const file of files) {
+    const markdown = await fs.readFile(file.filePath, 'utf8');
+    const topic = parseMd(markdown, { folder: file.filter, fileName: file.fileName, year: file.year });
+    Object.defineProperty(topic, '_filePath', { value: file.filePath, enumerable: false });
+    topics.push(topic);
+  }
+  topics.sort(topicSort);
+  return { topics, filters };
+}
+
+async function topicFiles() {
+  const out = [];
+  const rootEntries = await fs.readdir(CONTENTS_DIR, { withFileTypes: true }).catch(() => []);
+  for (const entry of rootEntries) {
+    if (!entry.isDirectory()) continue;
+    const firstPath = path.join(CONTENTS_DIR, entry.name);
+    if (isYearName(entry.name)) {
+      const filterEntries = await fs.readdir(firstPath, { withFileTypes: true }).catch(() => []);
+      for (const filterEntry of filterEntries) {
+        if (!filterEntry.isDirectory()) continue;
+        await collectTopicFiles(out, path.join(firstPath, filterEntry.name), filterEntry.name, entry.name);
+      }
+    } else {
+      await collectTopicFiles(out, firstPath, entry.name, '');
     }
   }
-  topics.sort((a, b) => a.title.localeCompare(b.title, 'fr', { numeric: true }));
-  return { topics, filters };
+  return out;
+}
+
+async function collectTopicFiles(out, dir, filter, year) {
+  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+  entries.forEach((entry) => {
+    if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.md')) return;
+    out.push({
+      filePath: path.join(dir, entry.name),
+      fileName: entry.name,
+      filter,
+      year
+    });
+  });
+}
+
+async function nextTopicNumber() {
+  const payload = await readAllTopics();
+  const maxNumber = payload.topics.reduce((max, topic) => Math.max(max, topicNumber(topic)), 0);
+  return Math.max(maxNumber, payload.topics.length) + 1;
+}
+
+function topicNumber(topic) {
+  const id = String(topic.id || '');
+  if (/^\d{4}$/.test(id)) return Number(id);
+  const sourceFile = String(topic.sourceFile || '');
+  const sourceMatch = sourceFile.match(/^(\d{4})[-_]/);
+  if (sourceMatch) return Number(sourceMatch[1]);
+  const titleMatch = String(topic.title || '').match(/^(\d{2,})\s*-\s+/);
+  return titleMatch ? Number(titleMatch[1]) : 0;
+}
+
+function topicSort(a, b) {
+  const dateDiff = dateRank(b.createdAt) - dateRank(a.createdAt);
+  if (dateDiff) return dateDiff;
+  const numberDiff = topicNumber(b) - topicNumber(a);
+  if (numberDiff) return numberDiff;
+  return a.title.localeCompare(b.title, 'fr', { numeric: true });
+}
+
+function dateRank(value) {
+  const time = Date.parse(`${value || ''}T00:00:00`);
+  return Number.isNaN(time) ? 0 : time;
+}
+
+function numberedTitle(number, title) {
+  return `${String(number).padStart(2, '0')} - ${stripTopicNumber(title)}`;
+}
+
+function stripTopicNumber(title) {
+  return text(title).replace(/^\d{2,}\s*-\s+/, '') || 'Nouveau sujet';
 }
 
 async function listFilterFolders() {
@@ -273,7 +384,17 @@ async function listFilterFolders() {
 
 async function listFilterDirs() {
   const entries = await fs.readdir(CONTENTS_DIR, { withFileTypes: true }).catch(() => []);
-  return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort((a, b) => a.localeCompare(b, 'fr'));
+  const filters = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    if (isYearName(entry.name)) {
+      const yearEntries = await fs.readdir(path.join(CONTENTS_DIR, entry.name), { withFileTypes: true }).catch(() => []);
+      yearEntries.filter((item) => item.isDirectory()).forEach((item) => filters.push(item.name));
+    } else {
+      filters.push(entry.name);
+    }
+  }
+  return uniqueStrings(filters).sort((a, b) => a.localeCompare(b, 'fr'));
 }
 
 async function ensureConfig() {
@@ -305,6 +426,115 @@ async function readConfig() {
 async function defaultFilterName() {
   const config = await readConfig();
   return config.filters[0] || FALLBACK_FILTER;
+}
+
+async function migrateYearFolders() {
+  await migrateContentsByYear();
+  await migrateDocumentsByYear();
+}
+
+async function migrateContentsByYear() {
+  const entries = await fs.readdir(CONTENTS_DIR, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isDirectory() || isYearName(entry.name)) continue;
+    const filter = entry.name;
+    const dir = path.join(CONTENTS_DIR, filter);
+    const files = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+    for (const file of files) {
+      if (!file.isFile() || !file.name.toLowerCase().endsWith('.md')) continue;
+      const oldPath = path.join(dir, file.name);
+      const markdown = await fs.readFile(oldPath, 'utf8');
+      const topic = parseMd(markdown, { folder: filter, fileName: file.name });
+      const year = topicYear(topic);
+      const nextDir = path.join(CONTENTS_DIR, year, filter);
+      await fs.mkdir(nextDir, { recursive: true });
+      const nextName = await uniqueNameInDir(nextDir, file.name);
+      await fs.rename(oldPath, path.join(nextDir, nextName));
+    }
+  }
+}
+
+async function migrateDocumentsByYear() {
+  const payload = await readAllTopics();
+  const used = new Set();
+  for (const topic of payload.topics) {
+    let changed = false;
+    const year = topicYear(topic);
+    for (const document of topic.documents) {
+      if (!isRootDocumentHref(document.href)) continue;
+      const fileName = path.basename(document.href);
+      const oldPath = path.join(DOCUMENTS_DIR, fileName);
+      const nextDir = path.join(DOCUMENTS_DIR, year);
+      await fs.mkdir(nextDir, { recursive: true });
+      const nextName = fss.existsSync(oldPath) ? await uniqueNameInDir(nextDir, fileName) : fileName;
+      const nextPath = path.join(nextDir, nextName);
+      if (fss.existsSync(oldPath)) await fs.rename(oldPath, nextPath);
+      document.href = documentHref(year, nextName);
+      used.add(nextName);
+      changed = true;
+    }
+    if (changed) await writeTopic(topic);
+  }
+
+  const entries = await fs.readdir(DOCUMENTS_DIR, { withFileTypes: true }).catch(() => []);
+  const year = currentYear();
+  const yearDir = path.join(DOCUMENTS_DIR, year);
+  await fs.mkdir(yearDir, { recursive: true });
+  for (const entry of entries) {
+    if (!entry.isFile() || entry.name === '.DS_Store') continue;
+    const oldPath = path.join(DOCUMENTS_DIR, entry.name);
+    const nextName = used.has(entry.name) ? await uniqueNameInDir(yearDir, entry.name) : entry.name;
+    await fs.rename(oldPath, path.join(yearDir, nextName));
+  }
+}
+
+async function filterDirsForName(name) {
+  const dirs = [];
+  const legacy = path.join(CONTENTS_DIR, name);
+  if (fss.existsSync(legacy)) dirs.push(legacy);
+  const entries = await fs.readdir(CONTENTS_DIR, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !isYearName(entry.name)) continue;
+    const dir = path.join(CONTENTS_DIR, entry.name, name);
+    if (fss.existsSync(dir)) dirs.push(dir);
+  }
+  return dirs;
+}
+
+async function uniqueNameInDir(dir, fileName) {
+  const parsed = path.parse(fileName);
+  let candidate = fileName;
+  let i = 2;
+  while (fss.existsSync(path.join(dir, candidate))) {
+    candidate = `${parsed.name}-${i}${parsed.ext}`;
+    i += 1;
+  }
+  return candidate;
+}
+
+function topicYear(topic) {
+  return yearFromDate(topic.createdAt) || currentYear();
+}
+
+function yearFromDate(value) {
+  const match = String(value || '').match(/^(\d{4})-/);
+  return match ? match[1] : '';
+}
+
+function currentYear() {
+  return String(new Date().getFullYear());
+}
+
+function isYearName(name) {
+  return /^\d{4}$/.test(String(name || ''));
+}
+
+function documentHref(year, fileName) {
+  return `Documents/${year}/${fileName}`;
+}
+
+function isRootDocumentHref(href) {
+  return /^Documents\/[^/]+$/i.test(String(href || ''));
 }
 
 async function writeConfig(config) {
@@ -356,13 +586,13 @@ async function findTopic(id) {
   const payload = await readAllTopics();
   const topic = payload.topics.find((item) => item.id === id);
   if (!topic) return null;
-  return { topic, filePath: topicPath(topic) };
+  return { topic, filePath: topic._filePath || topicPath(topic) };
 }
 
 function topicPath(topic) {
   const filter = safeFilterName(topic.filter || topic.folder || FALLBACK_FILTER);
   const file = safeMarkdownFileName(topic.sourceFile || `${safeFileName(topic.id || Date.now())}.md`);
-  const filePath = path.join(CONTENTS_DIR, filter, file);
+  const filePath = path.join(CONTENTS_DIR, topicYear(topic), filter, file);
   if (!isInside(CONTENTS_DIR, filePath)) throw Object.assign(new Error('Chemin de sujet invalide.'), { status: 400 });
   return filePath;
 }
@@ -374,23 +604,23 @@ async function writeTopic(topic) {
   await fs.writeFile(filePath, serialize(next), 'utf8');
 }
 
-async function uniqueMarkdownFile(filter, fileName) {
+async function uniqueMarkdownFile(year, filter, fileName) {
   const safe = safeMarkdownFileName(fileName);
   const parsed = path.parse(safe);
   let candidate = safe;
   let i = 2;
-  while (fss.existsSync(path.join(CONTENTS_DIR, filter, candidate))) {
+  while (fss.existsSync(path.join(CONTENTS_DIR, year, filter, candidate))) {
     candidate = `${parsed.name}-${i}${parsed.ext || '.md'}`;
     i += 1;
   }
   return candidate;
 }
 
-async function uniqueDocumentFile(fileName) {
+async function uniqueDocumentFile(year, fileName) {
   const parsed = path.parse(fileName);
   let candidate = fileName;
   let i = 2;
-  while (fss.existsSync(path.join(DOCUMENTS_DIR, candidate))) {
+  while (fss.existsSync(path.join(DOCUMENTS_DIR, year, candidate))) {
     candidate = `${parsed.name}-${i}${parsed.ext}`;
     i += 1;
   }
@@ -418,9 +648,16 @@ async function serveStatic(req, res, pathname) {
   else return sendText(res, 404, 'Fichier introuvable.');
 
   if (!filePath || !isInside(ROOT, filePath)) return sendText(res, 400, 'Chemin invalide.');
+  if (pathname.startsWith('/Documents/') && blockedDocument(filePath)) {
+    return sendText(res, 403, 'Type de document non autorise.');
+  }
   try {
     const data = await fs.readFile(filePath);
-    res.writeHead(200, { 'Content-Type': contentType(filePath), 'Cache-Control': 'no-store' });
+    res.writeHead(200, responseHeaders({
+      'Content-Type': servedContentType(pathname, filePath),
+      'Cache-Control': 'no-store',
+      ...documentHeaders(pathname, filePath)
+    }));
     if (req.method !== 'HEAD') res.end(data);
     else res.end();
   } catch {
@@ -431,6 +668,27 @@ async function serveStatic(req, res, pathname) {
 function safeJoin(base, relativePath) {
   const resolved = path.resolve(base, relativePath);
   return isInside(base, resolved) ? resolved : null;
+}
+
+function requiresAccessToken(host = HOST) {
+  return !LOCAL_HOSTS.has(host);
+}
+
+function needsAccessToken(pathname) {
+  if (!ACCESS_TOKEN) return false;
+  return pathname.startsWith('/api/') || pathname.startsWith('/Documents/');
+}
+
+function authorized(req, url) {
+  const provided = req.headers['x-copropro-token'] || url.searchParams.get('token') || url.searchParams.get('access_token') || '';
+  return constantTimeEqual(String(provided), ACCESS_TOKEN);
+}
+
+function constantTimeEqual(a, b) {
+  if (!a || !b || a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i += 1) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
 }
 
 function isInside(base, target) {
@@ -464,6 +722,13 @@ function readBody(req, maxBytes = MAX_UPLOAD_BYTES) {
     req.on('end', () => resolve(Buffer.concat(chunks)));
     req.on('error', reject);
   });
+}
+
+function validateAttachment(file) {
+  const ext = path.extname(file.filename || '').toLowerCase();
+  if (!ALLOWED_ATTACHMENT_EXTENSIONS.has(ext)) {
+    throw Object.assign(new Error(`Type de fichier non autorise : ${ext || 'sans extension'}.`), { status: 415 });
+  }
 }
 
 async function readMultipartFiles(req) {
@@ -588,12 +853,14 @@ function parseSections(md) {
 
 function normTopic(topic) {
   const filter = safeFilterName(topic.filter || topic.folder || FALLBACK_FILTER);
+  const priority = topic.priority === 'urgent' || topic.status === 'urgent' ? 'urgent' : '';
   const next = {
     id: topic.id || `topic-${Date.now()}`,
     title: text(topic.title) || 'Nouveau sujet',
     createdAt: topic.createdAt || '',
     filter,
     folder: filter,
+    priority,
     status: topicStatus(topic),
     sourceFile: safeMarkdownFileName(topic.sourceFile || `${topic.id || Date.now()}.md`),
     body: topic.body || 'Contexte à compléter.',
@@ -627,10 +894,10 @@ function serialize(topic) {
   if (topic.createdAt) lines.push(`createdAt: ${yq(topic.createdAt)}`);
   lines.push(
     `filter: ${yq(topic.filter)}`,
-    `status: ${yq(topicStatus(topic))}`,
-    `sourceFile: ${yq(topic.sourceFile)}`,
-    'documents:'
+    `status: ${yq(topicStatus(topic))}`
   );
+  if (isUrgentTopic(topic)) lines.push('priority: "urgent"');
+  lines.push(`sourceFile: ${yq(topic.sourceFile)}`, 'documents:');
   if (topic.documents.length) {
     topic.documents.forEach((document) => {
       lines.push(`  - label: ${yq(document.label || '')}`, `    href: ${yq(document.href || '')}`, `    type: ${yq(document.type || 'file')}`);
@@ -651,9 +918,15 @@ function topicStatus(topic) {
   const actions = Array.isArray(topic.actions) ? topic.actions : [];
   const done = actions.filter((action) => action.done).length;
   if (done && done === actions.length) return 'resolved';
+  if (isUrgentTopic(topic)) return 'urgent';
   if (done) return 'partial';
+  if (topic.status === 'resolved' || topic.status === 'partial') return 'todo';
   if (TOPIC_STATUSES.has(topic.status)) return topic.status;
   return 'todo';
+}
+
+function isUrgentTopic(topic) {
+  return topic.priority === 'urgent' || topic.status === 'urgent';
 }
 
 function topicMarkdownFileName(dateIso, title) {
@@ -723,16 +996,59 @@ function contentType(filePath) {
   }[ext] || 'application/octet-stream';
 }
 
+function servedContentType(pathname, filePath) {
+  if (!pathname.startsWith('/Documents/')) return contentType(filePath);
+  const ext = path.extname(filePath).toLowerCase();
+  return INLINE_DOCUMENT_EXTENSIONS.has(ext) ? contentType(filePath) : 'application/octet-stream';
+}
+
+function blockedDocument(filePath) {
+  return BLOCKED_DOCUMENT_EXTENSIONS.has(path.extname(filePath).toLowerCase());
+}
+
+function documentHeaders(pathname, filePath) {
+  if (!pathname.startsWith('/Documents/')) return {};
+  const ext = path.extname(filePath).toLowerCase();
+  if (INLINE_DOCUMENT_EXTENSIONS.has(ext)) return {};
+  return { 'Content-Disposition': `attachment; filename="${downloadFileName(filePath)}"` };
+}
+
+function downloadFileName(filePath) {
+  return path.basename(filePath).replace(/["\r\n]/g, '_');
+}
+
 async function removeIfExists(filePath) {
   await fs.rm(filePath, { force: true }).catch(() => {});
 }
 
 function sendJson(res, statusCode, payload) {
-  res.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.writeHead(statusCode, responseHeaders({ 'Content-Type': 'application/json; charset=utf-8' }));
   res.end(JSON.stringify(payload));
 }
 
 function sendText(res, statusCode, text) {
-  res.writeHead(statusCode, { 'Content-Type': 'text/plain; charset=utf-8' });
+  res.writeHead(statusCode, responseHeaders({ 'Content-Type': 'text/plain; charset=utf-8' }));
   res.end(text);
 }
+
+function responseHeaders(headers = {}) {
+  return { ...SECURITY_HEADERS, ...headers };
+}
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  contentType,
+  servedContentType,
+  blockedDocument,
+  documentHeaders,
+  validateAttachment,
+  requiresAccessToken,
+  responseHeaders,
+  safeFileName
+};
