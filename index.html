@@ -1,11 +1,199 @@
 <!DOCTYPE html>
-<html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Copropro — Sujets de Copropriété</title><meta name="description" content="Prototype HTML de suivi des sujets de copropriété avec contenus Markdown."><link rel="stylesheet" href="assets/styles.css"></head>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gestion d'Incidents — Copropro</title>
+  <meta name="description" content="Prototype HTML de suivi des sujets de copropriété avec contenus Markdown.">
+  <link rel="stylesheet" href="assets/styles.css">
+</head>
 <body>
-<header class="app-header"><div class="header-container"><div class="header-main-row"><div class="brand-section"><div class="brand-info"><h1 id="app-main-title" data-edit="app-title">Copropro</h1><p>📍 <span id="app-main-subtitle" data-edit="app-subtitle"></span></p></div></div><div class="header-actions"><button id="edit-toggle-btn" class="btn-ctrl" type="button">🛠️ Éditer le texte</button><button id="theme-toggle-btn" class="btn-ctrl" type="button" aria-label="Activer le thème sombre" title="Activer le thème sombre">🌙</button></div></div><div class="stats-grid"><button class="stat-card" data-stat-filter="active" type="button"><div class="stat-num normal" id="stat-total">0</div><div class="stat-label">Sujets Actifs</div></button><button class="stat-card" data-stat-filter="urgent" type="button"><div class="stat-num urgent" id="stat-urgent">0</div><div class="stat-label">Urgents / Critiques</div></button><button class="stat-card" data-stat-filter="todo" type="button"><div class="stat-num warning" id="stat-warning">0</div><div class="stat-label">À Traiter</div></button><button class="stat-card" data-stat-filter="partial" type="button"><div class="stat-num info" id="stat-info">0</div><div class="stat-label">Sujet partiellement traité</div></button><button class="stat-card" data-stat-filter="resolved" type="button"><div class="stat-num success" id="stat-resolved">0</div><div class="stat-label">Sujets Traités</div></button></div></div></header>
-<div id="edit-banner" class="edit-banner"><span>Mode édition actif — les changements de sujet sont enregistrés par la web app locale dans Contents et Documents.</span><div class="edit-banner-actions"><button id="header-bold-btn" class="btn-ctrl header-format-btn" type="button"><strong>Texte en gras</strong></button><button id="header-list-btn" class="btn-ctrl header-format-btn" type="button">• Liste</button></div></div>
-<section class="content-loader"><div id="content-loader-status" class="content-loader-status" aria-live="polite"></div></section>
-<section class="controls-bar"><div class="filter-tabs" id="filter-tabs"></div><div class="search-box"><span class="search-icon">⌕</span><input type="text" id="search-input" class="search-input" placeholder="Rechercher un sujet, mot-clé, document..."></div><div class="new-topic-row"><button id="new-topic-btn" class="btn-ctrl new-topic-btn" type="button">+ Nouveau Sujet</button></div></section>
-<main class="dashboard-layout"><section class="topics-section" id="topics-section"></section><aside class="sidebar"><div class="document-explorer"><h3>Explorateur de Documents</h3><div id="document-explorer-tree"></div></div></aside></main>
-<dialog id="new-topic-dialog" class="new-topic-dialog"><form id="new-topic-form" class="new-topic-form" method="dialog"><h2>Nouveau sujet</h2><div class="field-row"><label>Filtre <select id="new-topic-filter" required></select></label><label>Statut <select id="new-topic-status"><option value="todo">À traiter</option><option value="urgent">Urgent / Critique</option><option value="partial">Partiellement traité</option><option value="resolved">Traité</option></select></label></div><label>Titre <input id="new-topic-title" type="text" placeholder="Ex. Nouveau dossier à suivre" required></label><label>Contexte <div class="modal-format-toolbar"><button type="button" class="format-btn" id="new-topic-bold-btn"><strong>Texte en gras</strong></button><button type="button" class="format-btn" id="new-topic-list-btn">• Liste</button></div><textarea id="new-topic-body" placeholder="Décrivez le contexte du sujet..."></textarea></label><div class="new-topic-actions-block"><div class="new-topic-actions-header"><span>Proposition d'Action</span><button type="button" class="btn-ctrl new-topic-action-add" id="new-topic-action-add">+ Ajouter</button></div><div id="new-topic-actions-list" class="new-topic-actions-list"></div></div><div class="new-topic-dialog-actions"><button type="button" class="btn-ctrl" id="new-topic-cancel">Annuler</button><button type="submit" class="btn-ctrl new-topic-btn">Créer le sujet</button></div></form></dialog>
-<dialog id="lightbox" class="lightbox-dialog"><div class="lightbox-content"><div class="lightbox-header"><div id="lightbox-title" class="lightbox-title"></div><button id="lightbox-close" class="lightbox-close-btn" type="button">×</button></div><div class="lightbox-img-wrapper"><img id="lightbox-img" alt="Document visuel"></div><div id="lightbox-desc" class="lightbox-footer"></div></div></dialog>
-<script src="assets/app.js"></script></body></html>
+  <aside class="app-side-nav" aria-label="Navigation principale">
+    <div class="side-nav-heading">
+      <div class="side-nav-brand">
+        <img class="side-nav-logo" src="assets/svg/Logo-Copropro.svg" alt="" aria-hidden="true">
+        <span>Copropro</span>
+      </div>
+      <div class="side-nav-access">Accès Conseil Syndical</div>
+    </div>
+    <nav class="side-nav-links">
+      <a class="side-nav-link" href="#gestion-incidents" data-nav-view="incidents">Gestion d'Incidents</a>
+      <a class="side-nav-link" href="#annuaire" data-nav-view="directory">Annuaire</a>
+      <a class="side-nav-link" href="#contrat" data-nav-view="contract">Contrats</a>
+    </nav>
+  </aside>
+
+  <header class="app-header">
+    <div class="header-container">
+      <div class="header-main-row">
+        <div class="brand-section">
+          <div class="brand-info">
+            <h1 id="app-main-title" data-edit="app-title">Gestion d'Incidents</h1>
+            <p><img class="ui-icon" src="assets/svg/map-pin.svg" alt="" aria-hidden="true"> <span id="app-main-subtitle" data-edit="app-subtitle"></span></p>
+          </div>
+        </div>
+        <div class="header-actions">
+          <div class="search-box">
+            <span class="search-icon"><img class="ui-icon" src="assets/svg/search.svg" alt="" aria-hidden="true"></span>
+            <input
+              type="text"
+              id="search-input"
+              class="search-input"
+              aria-label="Rechercher un sujet, mot-clé ou document"
+              placeholder="Rechercher un sujet, mot-clé, document..."
+            >
+          </div>
+          <button id="edit-toggle-btn" class="btn-ctrl btn-icon-only" type="button" aria-label="Éditer le texte" title="Éditer le texte"><img class="ui-icon" src="assets/svg/edit.svg" alt="" aria-hidden="true"></button>
+          <button id="theme-toggle-btn" class="btn-ctrl btn-icon-only" type="button" aria-label="Activer le thème sombre" title="Activer le thème sombre"><img class="ui-icon" src="assets/svg/moon.svg" alt="" aria-hidden="true"></button>
+        </div>
+      </div>
+
+      <div class="stats-grid" data-view-panel="incidents">
+        <button class="stat-card" data-stat-filter="active" type="button">
+          <div class="stat-card-top">
+            <span class="stat-icon"><img class="ui-icon" src="assets/svg/status-active.svg" alt="" aria-hidden="true"></span>
+            <div class="stat-num normal" id="stat-total">0</div>
+          </div>
+          <div class="stat-label">Tous les Incidents</div>
+        </button>
+        <button class="stat-card" data-stat-filter="urgent" type="button">
+          <div class="stat-card-top">
+            <span class="stat-icon"><img class="ui-icon" src="assets/svg/status-urgent.svg" alt="" aria-hidden="true"></span>
+            <div class="stat-num urgent" id="stat-urgent">0</div>
+          </div>
+          <div class="stat-label">Urgents</div>
+        </button>
+        <button class="stat-card" data-stat-filter="todo" type="button">
+          <div class="stat-card-top">
+            <span class="stat-icon"><img class="ui-icon" src="assets/svg/status-todo.svg" alt="" aria-hidden="true"></span>
+            <div class="stat-num warning" id="stat-warning">0</div>
+          </div>
+          <div class="stat-label">À Traiter</div>
+        </button>
+        <button class="stat-card" data-stat-filter="partial" type="button">
+          <div class="stat-card-top">
+            <span class="stat-icon"><img class="ui-icon" src="assets/svg/status-partial.svg" alt="" aria-hidden="true"></span>
+            <div class="stat-num info" id="stat-info">0</div>
+          </div>
+          <div class="stat-label">Partiellement Traité</div>
+        </button>
+        <button class="stat-card" data-stat-filter="resolved" type="button">
+          <div class="stat-card-top">
+            <span class="stat-icon"><img class="ui-icon" src="assets/svg/status-resolved.svg" alt="" aria-hidden="true"></span>
+            <div class="stat-num success" id="stat-resolved">0</div>
+          </div>
+          <div class="stat-label">Traités</div>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <div id="edit-banner" class="edit-banner" data-view-panel="incidents">
+    <span>Mode édition actif — les changements de sujet sont enregistrés par la web app locale dans Contents et Documents.</span>
+    <div class="edit-banner-actions">
+      <button id="header-bold-btn" class="btn-ctrl header-format-btn" type="button"><strong>Texte en gras</strong></button>
+      <button id="header-list-btn" class="btn-ctrl header-format-btn" type="button">• Liste</button>
+    </div>
+  </div>
+
+  <section class="content-loader" data-view-panel="incidents">
+    <div id="content-loader-status" class="content-loader-status" aria-live="polite"></div>
+  </section>
+
+  <section class="controls-bar" data-view-panel="incidents">
+    <div class="new-topic-row">
+      <button id="new-topic-btn" class="btn-ctrl new-topic-btn" type="button">+ Nouveau Sujet</button>
+    </div>
+    <div class="filter-tabs" id="filter-tabs"></div>
+  </section>
+
+  <main class="dashboard-layout" data-view-panel="incidents">
+    <section class="topics-section" id="topics-section"></section>
+    <aside class="sidebar">
+      <div class="document-explorer">
+        <h3>Explorateur de Documents</h3>
+        <div id="document-explorer-tree"></div>
+      </div>
+    </aside>
+  </main>
+
+  <main class="annuaire-page" data-view-panel="directory" hidden>
+    <section class="annuaire-panel">
+      <p class="annuaire-intro">Cette page regroupera l'annuaire des copropriétaires.</p>
+      <div class="annuaire-empty">
+        <h2>Annuaire des copropriétaires</h2>
+        <p>Aucun contact n'est encore enregistré dans cette version locale.</p>
+      </div>
+    </section>
+  </main>
+
+  <main class="annuaire-page" data-view-panel="contract" hidden>
+    <section class="annuaire-panel">
+      <p class="annuaire-intro">Cette page regroupera les informations et documents liés aux contrats de copropriété.</p>
+      <div class="annuaire-empty">
+        <h2>Contrats</h2>
+        <p>Aucun contrat n'est encore enregistré dans cette version locale.</p>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="new-topic-dialog" class="new-topic-dialog">
+    <form id="new-topic-form" class="new-topic-form" method="dialog">
+      <h2>Nouveau sujet</h2>
+      <div class="field-row">
+        <label>
+          Filtre
+          <select id="new-topic-filter" required></select>
+        </label>
+        <label>
+          Statut
+          <select id="new-topic-status">
+            <option value="todo">À traiter</option>
+            <option value="urgent">Urgent / Critique</option>
+            <option value="partial">Partiellement traité</option>
+            <option value="resolved">Traité</option>
+          </select>
+        </label>
+      </div>
+      <label>
+        Titre
+        <input id="new-topic-title" type="text" placeholder="Ex. Nouveau dossier à suivre" required>
+      </label>
+      <label>
+        Contexte
+        <div class="modal-format-toolbar">
+          <button type="button" class="format-btn" id="new-topic-bold-btn"><strong>Texte en gras</strong></button>
+          <button type="button" class="format-btn" id="new-topic-list-btn">• Liste</button>
+        </div>
+        <textarea id="new-topic-body" placeholder="Décrivez le contexte du sujet..."></textarea>
+      </label>
+      <div class="new-topic-actions-block">
+        <div class="new-topic-actions-header">
+          <span>Proposition d'Action</span>
+          <button type="button" class="btn-ctrl new-topic-action-add" id="new-topic-action-add">+ Ajouter</button>
+        </div>
+        <div id="new-topic-actions-list" class="new-topic-actions-list"></div>
+      </div>
+      <div class="new-topic-dialog-actions">
+        <button type="button" class="btn-ctrl" id="new-topic-cancel">Annuler</button>
+        <button type="submit" class="btn-ctrl new-topic-btn">Créer le sujet</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="lightbox" class="lightbox-dialog">
+    <div class="lightbox-content">
+      <div class="lightbox-header">
+        <div id="lightbox-title" class="lightbox-title"></div>
+        <button id="lightbox-close" class="lightbox-close-btn" type="button">×</button>
+      </div>
+      <div class="lightbox-img-wrapper">
+        <img id="lightbox-img" alt="Document visuel">
+      </div>
+      <div id="lightbox-desc" class="lightbox-footer"></div>
+    </div>
+  </dialog>
+
+  <script src="assets/app.js"></script>
+</body>
+</html>

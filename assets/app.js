@@ -1,8 +1,16 @@
 (function clientApp() {
   const UI_KEY = 'copropro_ui_state_v1';
+  const ACCESS_TOKEN_KEY = 'copropro_access_token';
   const FALLBACK_FILTER = 'Filtre';
+  const DEFAULT_APP_TITLE = 'Gestion d\'Incidents';
+  const PAGE_TITLES = {
+    incidents: DEFAULT_APP_TITLE,
+    directory: 'Annuaire',
+    contract: 'Contrats'
+  };
   const MAX_UPLOAD_BYTES = 80 * 1024 * 1024;
   const TOPIC_STATUSES = new Set(['urgent', 'todo', 'partial', 'resolved']);
+  initAccessToken();
   const state = {
     topics: [],
     serverFilters: [],
@@ -15,7 +23,8 @@
     editMode: false,
     filterOrder: [],
     extraFilters: [],
-    deletingTopicIds: new Set()
+    deletingTopicIds: new Set(),
+    view: 'incidents'
   };
   const els = {};
 
@@ -28,6 +37,7 @@
     bindEvents();
     await loadFromApi();
     renderAll();
+    renderView();
   }
 
   function bind() {
@@ -66,6 +76,29 @@
     });
   }
 
+  function iconElement(name) {
+    const img = document.createElement('img');
+    img.className = 'ui-icon';
+    img.src = `assets/svg/${name}.svg`;
+    img.alt = '';
+    img.setAttribute('aria-hidden', 'true');
+    return img;
+  }
+
+  function iconHtml(name, className = 'ui-icon') {
+    return `<img class="${className}" src="assets/svg/${name}.svg" alt="" aria-hidden="true">`;
+  }
+
+  function setIconText(element, iconName, label) {
+    element.replaceChildren(iconElement(iconName), document.createTextNode(label ? ` ${label}` : ''));
+  }
+
+  function setIconOnly(element, iconName, label) {
+    element.replaceChildren(iconElement(iconName));
+    element.ariaLabel = label;
+    element.title = label;
+  }
+
   function bindEvents() {
     els['edit-toggle-btn'].onclick = () => setEditMode(!state.editMode);
     bindHeaderFormat('header-bold-btn', 'bold');
@@ -74,6 +107,7 @@
     els['search-input'].oninput = (event) => {
       state.search = event.target.value.toLowerCase().trim();
       renderTopics();
+      renderExplorer();
     };
     document.querySelectorAll('.stat-card').forEach((card) => {
       card.onclick = () => {
@@ -93,6 +127,7 @@
     els.lightbox.onclick = (event) => {
       if (event.target === els.lightbox) els.lightbox.close();
     };
+    window.addEventListener('hashchange', renderView);
     document.addEventListener('wheel', rescueTrappedWheel, { capture: true, passive: false });
   }
 
@@ -124,7 +159,7 @@
   function restoreUi() {
     try {
       const ui = JSON.parse(localStorage.getItem(UI_KEY) || '{}');
-      if (ui.title) els['app-main-title'].textContent = ui.title;
+      els['app-main-title'].textContent = ui.title && ui.title !== 'Copropro' ? ui.title : DEFAULT_APP_TITLE;
       document.body.classList.toggle('light-theme', ui.theme !== 'dark');
     } catch {
       document.body.classList.add('light-theme');
@@ -137,14 +172,38 @@
     localStorage.setItem(
       UI_KEY,
       JSON.stringify({
-        title: text(els['app-main-title']) || 'Copropro',
+        title: text(els['app-main-title']) || DEFAULT_APP_TITLE,
         theme: document.body.classList.contains('light-theme') ? 'light' : 'dark'
       })
     );
   }
 
+  function currentViewFromHash() {
+    if (window.location.hash === '#annuaire') return 'directory';
+    if (window.location.hash === '#contrat') return 'contract';
+    return 'incidents';
+  }
+
+  function renderView() {
+    state.view = currentViewFromHash();
+    const pageTitle = PAGE_TITLES[state.view] || DEFAULT_APP_TITLE;
+    document.body.dataset.view = state.view;
+    if (document.activeElement !== els['app-main-title']) els['app-main-title'].textContent = pageTitle;
+    document.title = `${pageTitle} — Copropro`;
+    document.querySelectorAll('[data-view-panel]').forEach((panel) => {
+      panel.hidden = panel.dataset.viewPanel !== state.view;
+    });
+    document.querySelectorAll('[data-nav-view]').forEach((link) => {
+      const isActive = link.dataset.navView === state.view;
+      link.classList.toggle('active', isActive);
+      if (isActive) link.setAttribute('aria-current', 'page');
+      else link.removeAttribute('aria-current');
+    });
+  }
+
   function saveUi() {
     persistUi();
+    renderView();
   }
 
   async function loadConfig() {
@@ -239,7 +298,7 @@
 
   function initTheme() {
     const isLight = document.body.classList.contains('light-theme');
-    els['theme-toggle-btn'].textContent = isLight ? '🌙' : '☀️';
+    els['theme-toggle-btn'].replaceChildren(iconElement(isLight ? 'moon' : 'sun'));
     els['theme-toggle-btn'].ariaLabel = isLight ? 'Activer le thème sombre' : 'Activer le thème clair';
     els['theme-toggle-btn'].title = isLight ? 'Activer le thème sombre' : 'Activer le thème clair';
   }
@@ -254,7 +313,7 @@
     state.editMode = value;
     document.body.classList.toggle('edit-mode-active', value);
     els['edit-banner'].classList.toggle('active', value);
-    els['edit-toggle-btn'].textContent = value ? '💾 Quitter l\'édition' : '🛠️ Éditer le texte';
+    setIconOnly(els['edit-toggle-btn'], value ? 'save' : 'edit', value ? 'Quitter l\'édition' : 'Éditer le texte');
     [els['app-main-title'], els['app-main-subtitle']].forEach((element) => {
       element.contentEditable = value;
     });
@@ -296,7 +355,10 @@
   }
 
   async function api(url, options = {}) {
-    const response = await fetch(url, options);
+    const token = currentAccessToken();
+    const headers = new Headers(options.headers || {});
+    if (token) headers.set('X-Copropro-Token', token);
+    const response = await fetch(url, { ...options, headers });
     const contentType = response.headers.get('content-type') || '';
     const payload = contentType.includes('application/json') ? await response.json() : await response.text();
     if (!response.ok) {
@@ -307,18 +369,20 @@
   }
 
   function setTopics(topics) {
-    state.topics = topics.map(norm).sort((a, b) => a.title.localeCompare(b.title, 'fr', { numeric: true }));
+    state.topics = topics.map(norm).sort(topicSort);
     renderAll();
   }
 
   function norm(topic) {
     const filter = topic.filter || topic.folder || defaultFilter();
+    const priority = topic.priority === 'urgent' || topic.status === 'urgent' ? 'urgent' : '';
     return {
       id: topic.id || `topic-${Date.now()}`,
       title: topic.title || 'Nouveau sujet',
       createdAt: topic.createdAt || '',
       filter,
       folder: topic.folder || filter,
+      priority,
       status: topicStatus(topic),
       sourceFile: topic.sourceFile || `${topic.id || Date.now()}.md`,
       body: topic.body || 'Contexte à compléter.',
@@ -388,6 +452,7 @@
     tab.draggable = state.editMode && managed;
     if (!managed) tab.dataset.systemFilter = id;
     tab.classList.toggle('active', state.activeFilter === id);
+    tab.setAttribute('aria-pressed', String(state.activeFilter === id));
 
     const span = document.createElement('span');
     span.className = 'filter-name';
@@ -581,7 +646,9 @@
       grouped.get(topic.filter).push(topic);
     });
     if (!grouped.size) {
-      els['topics-section'].innerHTML = '<div class="empty-state"><h3>Aucun sujet trouvé</h3><p>Modifiez vos critères ou créez un sujet.</p></div>';
+      const title = state.search ? 'Aucun sujet ne correspond à la recherche' : 'Aucun sujet trouvé';
+      const hint = state.search ? 'Essayez un autre mot-clé ou effacez la recherche.' : 'Modifiez vos critères ou créez un sujet.';
+      els['topics-section'].innerHTML = `<div class="empty-state"><h3>${esc(title)}</h3><p>${esc(hint)}</p></div>`;
       return;
     }
     grouped.forEach((list, filter) => {
@@ -614,7 +681,7 @@
     if (topic.createdAt) {
       const date = document.createElement('span');
       date.className = 'topic-created-date';
-      date.textContent = formatDate(topic.createdAt);
+      date.replaceChildren(iconElement('calendar'), document.createTextNode(formatDate(topic.createdAt)));
       titleGroup.appendChild(date);
     }
     if (state.editMode) {
@@ -643,7 +710,10 @@
 
     const action = document.createElement('div');
     action.className = 'action-box';
-    action.innerHTML = '<div class="action-box-title">⚡ Proposition d\'Action</div>';
+    const actionTitle = document.createElement('div');
+    actionTitle.className = 'action-box-title';
+    setIconText(actionTitle, 'action', 'Proposition d\'Action');
+    action.appendChild(actionTitle);
     const list = document.createElement('div');
     list.className = 'action-box-text';
     topic.actions.forEach((item, index) => list.appendChild(actionRow(topic, item, index)));
@@ -659,13 +729,30 @@
 
     const notes = document.createElement('div');
     notes.className = 'notes-block';
-    notes.innerHTML = '<span class="notes-label">📝 Notes de suivi & actions menées :</span>';
-    const noteContent = document.createElement('div');
-    noteContent.className = 'notes-content markdown-body';
-    noteContent.innerHTML = mdHtml(topic.notes);
-    noteContent.contentEditable = state.editMode;
-    noteContent.onblur = () => update(topic, { notes: htmlMd(noteContent) });
-    notes.appendChild(noteContent);
+    const notesLabel = document.createElement('span');
+    notesLabel.className = 'notes-label';
+    setIconText(notesLabel, 'note', 'Notes de Suivi');
+    notes.appendChild(notesLabel);
+    const notesList = document.createElement('div');
+    notesList.className = 'notes-list';
+    parseNoteEntries(topic).forEach((note, index) => notesList.appendChild(noteRow(topic, note, index)));
+    if (!notesList.children.length) {
+      const empty = document.createElement('div');
+      empty.className = 'notes-empty';
+      empty.textContent = state.editMode ? 'Aucune note de suivi. Utilisez le bouton pour en ajouter une.' : 'Aucune note de suivi.';
+      notesList.appendChild(empty);
+    }
+    const addNote = document.createElement('button');
+    addNote.type = 'button';
+    addNote.className = 'btn-ctrl action-add-point-btn note-add-point-btn';
+    addNote.textContent = '+ Ajouter une note';
+    addNote.onclick = () => {
+      const entries = parseNoteEntries(topic);
+      entries.push({ date: todayIso(), text: 'Nouvelle note de suivi à préciser' });
+      topic.notes = serializeNoteEntries(entries);
+      saveTopic(topic).then(renderAll);
+    };
+    notes.append(notesList, addNote);
 
     container.append(body, action, notes);
     if (state.editMode || topic.documents.length) container.appendChild(attachments(topic));
@@ -676,14 +763,17 @@
     const row = document.createElement('div');
     row.className = 'action-point-row';
     const checkbox = document.createElement('input');
+    const textId = `action-text-${topic.id}-${index}`;
     checkbox.type = 'checkbox';
     checkbox.className = 'action-point-checkbox';
     checkbox.checked = !!action.done;
+    checkbox.setAttribute('aria-labelledby', textId);
     checkbox.onchange = () => {
       topic.actions[index].done = checkbox.checked;
       saveTopic(topic).then(renderAll);
     };
     const span = document.createElement('span');
+    span.id = textId;
     span.className = 'action-point-text';
     span.textContent = action.text;
     span.contentEditable = state.editMode;
@@ -706,6 +796,60 @@
     return row;
   }
 
+  function noteRow(topic, note, index) {
+    const row = document.createElement('div');
+    row.className = 'action-point-row note-point-row';
+    const date = document.createElement('span');
+    date.className = 'note-point-date';
+    date.textContent = formatDate(note.date);
+    const span = document.createElement('span');
+    span.className = 'action-point-text note-point-text';
+    span.textContent = note.text;
+    span.contentEditable = state.editMode;
+    span.onkeydown = enterBlur;
+    span.onblur = () => {
+      const entries = parseNoteEntries(topic);
+      entries[index] = { ...entries[index], text: text(span) || 'Nouvelle note de suivi à préciser' };
+      topic.notes = serializeNoteEntries(entries);
+      saveTopic(topic).then(renderAll);
+    };
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'action-point-remove-btn';
+    remove.textContent = '×';
+    remove.onclick = () => {
+      if (!state.editMode) return;
+      const entries = parseNoteEntries(topic);
+      entries.splice(index, 1);
+      topic.notes = serializeNoteEntries(entries);
+      saveTopic(topic).then(renderAll);
+    };
+    row.append(date, span, remove);
+    return row;
+  }
+
+  function parseNoteEntries(topic) {
+    const fallbackDate = topic.createdAt || todayIso();
+    const raw = String(topic.notes || '').trim();
+    if (!raw) return [];
+    const blocks = raw.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
+    return blocks.map((block) => {
+      const normalized = block.replace(/^\s*[-*]\s+/, '');
+      const match = normalized.match(/^(\d{4}-\d{2}-\d{2})\s+[—-]\s+([\s\S]+)$/);
+      return match
+        ? { date: match[1], text: match[2].trim() }
+        : { date: fallbackDate, text: normalized };
+    });
+  }
+
+  function serializeNoteEntries(entries) {
+    return entries
+      .map((entry) => ({ date: entry.date || todayIso(), text: text(entry.text) }))
+      .filter((entry) => entry.text)
+      .map((entry) => `- ${entry.date} — ${entry.text}`)
+      .join('\n\n');
+  }
+
   function attachments(topic) {
     const wrapper = document.createElement('div');
     wrapper.className = 'card-attachments';
@@ -715,7 +859,7 @@
     header.className = 'uploaded-documents-header';
     const title = document.createElement('span');
     title.className = 'uploaded-documents-title';
-    title.textContent = '📎 Documents associés';
+    setIconText(title, 'paperclip', 'Documents associés');
     header.appendChild(title);
 
     if (state.editMode) {
@@ -753,14 +897,17 @@
     item.className = 'uploaded-document-item';
     const link = document.createElement('a');
     link.className = 'attachment-btn uploaded-document-link';
-    link.href = documentData.href || '#';
+    link.href = documentHref(documentData.href || '#');
     link.target = '_blank';
     link.rel = 'noopener';
-    link.textContent = `${documentData.type === 'image' ? '🖼️' : /\.(eml|msg)$/i.test(documentData.href || '') ? '✉️' : '📄'} ${documentData.label || documentData.href}`;
+    link.replaceChildren(
+      iconElement(documentData.type === 'image' ? 'image' : /\.(eml|msg)$/i.test(documentData.href || '') ? 'mail' : 'file'),
+      document.createTextNode(documentData.label || documentData.href)
+    );
     if (documentData.type === 'image') {
       link.onclick = (event) => {
         event.preventDefault();
-        els['lightbox-img'].src = documentData.href;
+        els['lightbox-img'].src = documentHref(documentData.href);
         els['lightbox-title'].textContent = documentData.label || 'Image';
         els['lightbox-desc'].textContent = documentData.description || documentData.href;
         els.lightbox.showModal();
@@ -820,26 +967,74 @@
 
   function renderExplorer() {
     els['document-explorer-tree'].innerHTML = '';
-    const docs = state.topics.flatMap((topic) => topic.documents.map((documentData) => ({ topic, documentData })));
+    const docs = visibleTopics().flatMap((topic) => topic.documents.map((documentData) => ({ topic, documentData })));
     if (!docs.length) {
-      els['document-explorer-tree'].textContent = 'Aucun document associé.';
+      els['document-explorer-tree'].textContent = state.search ? 'Aucun document associé aux résultats.' : 'Aucun document associé.';
       return;
     }
-    filters().forEach((filter) => {
-      const related = docs.filter((item) => item.topic.filter === filter);
-      if (!related.length) return;
-      const box = document.createElement('div');
-      box.className = 'tree-folder';
-      box.innerHTML = `<div class="tree-folder-header"><span class="folder-arrow">▼</span> 📁 ${esc(label(filter))}</div><div class="tree-folder-content"></div>`;
-      const content = box.querySelector('.tree-folder-content');
-      related.forEach(({ documentData }) => content.appendChild(docLink(documentData)));
-      box.querySelector('.tree-folder-header').onclick = () => {
-        const hide = content.style.display !== 'none';
-        content.style.display = hide ? 'none' : 'flex';
-        box.querySelector('.folder-arrow').textContent = hide ? '▶' : '▼';
-      };
-      els['document-explorer-tree'].appendChild(box);
+
+    const currentYear = String(new Date().getFullYear());
+    const years = unique([currentYear, ...docs.map(({ topic, documentData }) => documentYear(documentData, topic))])
+      .filter(Boolean)
+      .sort((a, b) => b.localeCompare(a, 'fr', { numeric: true }));
+
+    years.forEach((year) => {
+      const yearDocs = docs.filter(({ topic, documentData }) => documentYear(documentData, topic) === year);
+      const yearFolder = treeFolder(year, 'folder');
+      const yearContent = yearFolder.querySelector('.tree-folder-content');
+
+      filters().forEach((filter) => {
+        const related = yearDocs.filter((item) => item.topic.filter === filter && !isArchivedDocument(item.documentData, docs));
+        if (!related.length) return;
+        const filterFolder = treeFolder(label(filter), 'folder');
+        const filterContent = filterFolder.querySelector('.tree-folder-content');
+        related.forEach(({ documentData }) => filterContent.appendChild(docLink(documentData)));
+        yearContent.appendChild(filterFolder);
+      });
+
+      const archived = yearDocs.filter((item) => isArchivedDocument(item.documentData, docs));
+      if (archived.length) {
+        const archiveFolder = treeFolder('Archives', 'archive');
+        const archiveContent = archiveFolder.querySelector('.tree-folder-content');
+        archived.forEach(({ documentData }) => archiveContent.appendChild(docLink(documentData)));
+        yearContent.appendChild(archiveFolder);
+      }
+
+      if (!yearContent.children.length) {
+        const empty = document.createElement('span');
+        empty.className = 'tree-empty';
+        empty.textContent = 'Aucun document pour cette année.';
+        yearContent.appendChild(empty);
+      }
+
+      els['document-explorer-tree'].appendChild(yearFolder);
     });
+  }
+
+  function treeFolder(title, iconName = 'folder') {
+    const box = document.createElement('div');
+    box.className = 'tree-folder';
+    box.innerHTML = `<div class="tree-folder-header"><span class="folder-arrow">${iconHtml('chevron-down', 'ui-icon tree-chevron')}</span>${iconHtml(iconName, 'ui-icon tree-folder-icon')}<span>${esc(title)}</span></div><div class="tree-folder-content"></div>`;
+    const content = box.querySelector('.tree-folder-content');
+    box.querySelector('.tree-folder-header').onclick = () => {
+      const hide = content.style.display !== 'none';
+      content.style.display = hide ? 'none' : 'flex';
+      box.querySelector('.folder-arrow').innerHTML = iconHtml(hide ? 'chevron-right' : 'chevron-down', 'ui-icon tree-chevron');
+    };
+    return box;
+  }
+
+  function documentYear(documentData, topic) {
+    const hrefYear = String(documentData.href || '').match(/^Documents\/(\d{4})\//);
+    if (hrefYear) return hrefYear[1];
+    const topicYear = String(topic.createdAt || '').match(/^(\d{4})-/);
+    return topicYear ? topicYear[1] : String(new Date().getFullYear());
+  }
+
+  function isArchivedDocument(documentData, docs) {
+    const href = documentData.href || '';
+    if (!href) return false;
+    return !docs.some((item) => item.documentData.href === href && status(item.topic) !== 'resolved');
   }
 
   function stats() {
@@ -864,7 +1059,9 @@
       document.getElementById(id).textContent = value;
     });
     document.querySelectorAll('.stat-card').forEach((card) => {
-      card.classList.toggle('stat-filter-active', card.dataset.statFilter === state.statFilter);
+      const active = card.dataset.statFilter === state.statFilter;
+      card.classList.toggle('stat-filter-active', active);
+      card.setAttribute('aria-pressed', String(active));
     });
   }
 
@@ -876,9 +1073,15 @@
     const actions = Array.isArray(topic.actions) ? topic.actions : [];
     const done = actions.filter((action) => action.done).length;
     if (done && done === actions.length) return 'resolved';
+    if (isUrgentTopic(topic)) return 'urgent';
     if (done) return 'partial';
+    if (topic.status === 'resolved' || topic.status === 'partial') return 'todo';
     if (TOPIC_STATUSES.has(topic.status)) return topic.status;
     return 'todo';
+  }
+
+  function isUrgentTopic(topic) {
+    return topic.priority === 'urgent' || topic.status === 'urgent';
   }
 
   function badgeClass(currentStatus) {
@@ -939,7 +1142,29 @@
     const index = state.topics.findIndex((item) => item.id === normalized.id);
     if (index >= 0) state.topics.splice(index, 1, normalized);
     else state.topics.push(normalized);
-    state.topics.sort((a, b) => a.title.localeCompare(b.title, 'fr', { numeric: true }));
+    state.topics.sort(topicSort);
+  }
+
+  function topicSort(a, b) {
+    const dateDiff = dateRank(b.createdAt) - dateRank(a.createdAt);
+    if (dateDiff) return dateDiff;
+    const numberDiff = topicNumber(b) - topicNumber(a);
+    if (numberDiff) return numberDiff;
+    return a.title.localeCompare(b.title, 'fr', { numeric: true });
+  }
+
+  function dateRank(value) {
+    const time = Date.parse(`${value || ''}T00:00:00`);
+    return Number.isNaN(time) ? 0 : time;
+  }
+
+  function topicNumber(topic) {
+    const id = String(topic.id || '');
+    if (/^\d{4}$/.test(id)) return Number(id);
+    const sourceMatch = String(topic.sourceFile || '').match(/^(\d{4})[-_]/);
+    if (sourceMatch) return Number(sourceMatch[1]);
+    const titleMatch = String(topic.title || '').match(/^(\d{2,})\s*-\s+/);
+    return titleMatch ? Number(titleMatch[1]) : 0;
   }
 
   function mdHtml(markdown) {
@@ -1098,6 +1323,35 @@
     els['content-loader-status'].className = `content-loader-status ${kind}`.trim();
   }
 
+  function initAccessToken() {
+    try {
+      const url = new URL(window.location.href);
+      const token = url.searchParams.get('token') || url.searchParams.get('access_token');
+      if (!token) return;
+      sessionStorage.setItem(ACCESS_TOKEN_KEY, token);
+      url.searchParams.delete('token');
+      url.searchParams.delete('access_token');
+      window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`);
+    } catch {
+      // L'app locale reste utilisable sans jeton.
+    }
+  }
+
+  function currentAccessToken() {
+    try {
+      return sessionStorage.getItem(ACCESS_TOKEN_KEY) || '';
+    } catch {
+      return '';
+    }
+  }
+
+  function documentHref(href) {
+    const token = currentAccessToken();
+    if (!token || !String(href || '').startsWith('Documents/')) return href || '#';
+    const separator = href.includes('?') ? '&' : '?';
+    return `${href}${separator}token=${encodeURIComponent(token)}`;
+  }
+
   function enterBlur(event) {
     if (event.key === 'Enter') {
       event.preventDefault();
@@ -1118,6 +1372,10 @@
     const date = new Date(`${value}T00:00:00`);
     if (Number.isNaN(date.getTime())) return value;
     return date.toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' });
+  }
+
+  function todayIso() {
+    return new Date().toISOString().slice(0, 10);
   }
 
   function formatBytes(bytes) {

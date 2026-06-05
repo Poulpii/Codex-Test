@@ -7,5 +7,5 @@ Syndic: Nom du Syndic
 
 ## Filtres
 
-- Bâtiment A (Rue)
 - Général
+- Bâtiment A (Rue)
