@@ -1,10 +1,21 @@
 {
-  "name": "suivi-copro-local",
+  "name": "copropro-local",
   "version": "1.0.0",
   "private": true,
-  "description": "Web app locale de suivi des sujets de copropriete.",
+  "description": "Web app locale de suivi des incidents de copropriete.",
+  "type": "commonjs",
   "scripts": {
-    "start": "node server.js"
+    "build": "vite build",
+    "dev": "vite --host 127.0.0.1 --port 5173",
+    "start": "npm run build && node server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "vite": "6.3.5"
   },
   "engines": {
     "node": ">=18"

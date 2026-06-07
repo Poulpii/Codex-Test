@@ -4,7 +4,7 @@
 
 Application web locale pour suivre les sujets d’une copropriété : incidents, demandes, documents, actions à mener et état d’avancement.
 
-L’app fonctionne en local avec Node.js, sans base de données externe. Les sujets sont enregistrés sous forme de fichiers Markdown et les pièces jointes sont stockées dans un dossier dédié.
+L’app fonctionne en local avec React, Vite et un serveur Node.js, sans base de données externe. Les sujets sont enregistrés sous forme de fichiers Markdown et les pièces jointes sont stockées dans un dossier dédié.
 
 ## Fonctionnalités
 
@@ -17,21 +17,21 @@ L’app fonctionne en local avec Node.js, sans base de données externe. Les suj
 - Ajout et suppression de pièces jointes.
 - Explorateur de documents intégré.
 - Explorateur de documents organisé par année, filtres actifs et archives.
-- Changement de thème clair / sombre.
+- Interface claire unique, compacte et adaptée au suivi répété.
 - Stockage local simple dans des dossiers `Contents`, `Documents` et `assets`.
 
 ## Aperçu du projet
 
 ```text
 .
-├── index.html              # Interface principale
+├── index.html              # Point d'entrée Vite
+├── src/                    # Interface React et composants UI
 ├── server.js               # Serveur local Node.js
 ├── package.json            # Script de démarrage
-├── Contents/               # Sujets Markdown classés par année et filtre
-├── Documents/              # Pièces jointes classées par année
+├── Contents/Incidents/     # Sujets Markdown classés par année
+├── Documents/Incidents/    # Pièces jointes d'incidents classées par année
 ├── assets/
-│   ├── app.js              # Logique front-end
-│   ├── styles.css          # Styles de l’application
+│   ├── svg/                # Icônes locales
 │   └── config.md           # Adresse, syndic et filtres affichés
 └── Demarrer web app.command # Lanceur macOS optionnel
 ```
@@ -105,16 +105,15 @@ Par sécurité, le serveur refuse désormais un lancement réseau (`HOST` non lo
 
 ## Format des sujets
 
-Chaque sujet est enregistré en Markdown dans le dossier `Contents`, dans un sous-dossier par année puis par filtre.
+Chaque sujet est enregistré en Markdown dans `Contents/Incidents`, dans un sous-dossier par année.
 
 Exemple :
 
 ```text
 Contents/
-└── 2026/
-    ├── Général/
-    │   └── 0002-02-juin-2026-Vitre-Porte-Entree-Brisee.md
-    └── Bâtiment A (Rue)/
+└── Incidents/
+    └── 2026/
+        ├── 0002-02-juin-2026-Vitre-Porte-Entree-Brisee.md
         └── 0001-02-juin-2026-Infiltration-Eau-Cage-Escalier-Bat-A.md
 ```
 
@@ -129,15 +128,16 @@ Un sujet peut contenir :
 - des actions proposées ;
 - des documents associés.
 
-Les pièces jointes ajoutées depuis l’interface sont copiées dans `Documents`, également dans un sous-dossier par année.
+Les pièces jointes ajoutées depuis l’interface sont copiées dans `Documents/Incidents`, également dans un sous-dossier par année.
 
 Exemple :
 
 ```text
 Documents/
-└── 2026/
-    ├── Vitre-Brisee.png
-    └── LRR-Syndic-a-Copro.pdf
+└── Incidents/
+    └── 2026/
+        ├── Vitre-Brisee.png
+        └── LRR-Syndic-a-Copro.pdf
 ```
 
 Dans l’explorateur de documents de l’interface, les fichiers sont regroupés par année. Les documents rattachés uniquement à des sujets traités sont affichés dans `Archives`, sauf s’ils sont encore utilisés par au moins un autre sujet non traité.
@@ -180,7 +180,7 @@ Les changements faits depuis l’interface en mode édition sont enregistrés da
 - suppression d’un filtre vide ;
 - réorganisation des filtres par glisser-déposer.
 
-Les filtres restent liés aux dossiers de `Contents/<année>/`. Lorsqu’un filtre est ajouté ou renommé, le serveur crée ou renomme le dossier correspondant dans les années concernées et met à jour les sujets Markdown.
+Les filtres sont stockés dans `assets/config.md` et dans le front matter des sujets Markdown. Ils ne créent plus de dossiers physiques.
 
 ## Données locales
 
